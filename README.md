@@ -4,10 +4,11 @@ This project contains small helper scripts for managing Anki data with the `apy`
 
 It is also structured as a GitHub Copilot skill repository, so the scripts can be invoked through GitHub Copilot in VS Code in addition to being run directly from the shell.
 
-The repository currently focuses on two tasks:
+The repository currently supports three tasks:
 
 1. List available Anki decks.
-2. List notes that match an Anki search query such as `deck:English`.
+2. Export Anki notes to individual markdown files.
+3. Update Anki note fields from a markdown file or interactively.
 
 ## What Is `apy`
 
@@ -33,12 +34,13 @@ This repository includes GitHub Copilot skill definitions under `.github/skills`
 That means you can:
 
 1. Run the shell scripts directly yourself.
-2. Use GitHub Copilot in VS Code to trigger the deck and note listing workflows.
+2. Use GitHub Copilot in VS Code to trigger the deck, export, and update workflows.
 
 The current Copilot skill folders are:
 
 1. `.github/skills/anki-decks`
-2. `.github/skills/anki-list`
+2. `.github/skills/anki-export`
+3. `.github/skills/anki-update`
 
 ## Anki Collection Location
 
@@ -97,13 +99,15 @@ apy -V
 
 ```text
 .github/skills/anki-decks/
-.github/skills/anki-list/
+.github/skills/anki-export/
+.github/skills/anki-update/
 ```
 
 Main scripts:
 
 1. `.github/skills/anki-decks/list-anki-decks.sh`
-2. `.github/skills/anki-list/list-anki-notes.sh`
+2. `.github/skills/anki-export/export-anki-notes.sh`
+3. `.github/skills/anki-update/update-anki-notes.sh`
 
 ## Usage
 
@@ -114,32 +118,39 @@ cd .github/skills/anki-decks
 sh list-anki-decks.sh
 ```
 
-List all notes in the `English` deck:
+Export all notes in the `English` deck to markdown files:
 
 ```sh
-cd .github/skills/anki-list
-sh list-anki-notes.sh "deck:English"
+cd .github/skills/anki-export
+sh export-anki-notes.sh "deck:English" ./english-notes
 ```
 
-List notes with a line limit:
+Export notes matching any Anki query:
 
 ```sh
-cd .github/skills/anki-list
-sh list-anki-notes.sh "deck:English" 40
+sh export-anki-notes.sh 'tag:leech' ./leeches
+sh export-anki-notes.sh 'deck:English is:new' ./new-english
 ```
 
-You can also use any valid Anki search query, for example:
+Update notes from a markdown file:
 
 ```sh
-sh list-anki-notes.sh "tag:marked"
-sh list-anki-notes.sh "deck:English is:new"
+cd .github/skills/anki-update
+sh update-anki-notes.sh file path/to/notes.md
+```
+
+Interactively edit notes matching a query:
+
+```sh
+sh update-anki-notes.sh edit "deck:English"
 ```
 
 ## Notes
 
 1. The deck listing script extracts deck names from `apy info`.
-2. The note listing script uses `apy list-notes -v`.
-3. The note listing script returns all notes by default and accepts an optional line limit as the second argument.
+2. The export script uses `apy list-notes -v` and saves each note as a separate `.md` file named after its Front field.
+3. HTML tags in Back fields (`<ul>`, `<li>`, `<br>`, etc.) are converted to markdown during export.
+4. The update script supports two modes: `file` (apply edits from a markdown file) and `edit` (open notes in your default editor).
 
 ## Troubleshooting
 
@@ -155,4 +166,6 @@ If the scripts cannot find your collection, check:
 2. `APY_BASE` or `ANKI_BASE` is set correctly, or `~/.config/apy/apy.json` is configured.
 3. `apy info` runs successfully.
 
-If a script prints a usage error, make sure you passed the required query argument to `list-anki-notes.sh`.
+If the export script prints "No notes found", verify your query returns results with `apy list-notes -v "<query>"`.
+
+If the update script fails, make sure the markdown file contains valid note headers in the format `# Note (nid: <id>)`.
