@@ -62,21 +62,26 @@ for note in notes:
         lambda m: m.group(1) + html_to_md(m.group(2)) + ('\n' if m.group(3) else ''),
         note, flags=re.DOTALL | re.MULTILINE
     )
+    # Extract deck for subfolder
+    deck_match = re.search(r'^deck:\s*(.+)$', note, re.MULTILINE)
+    deck = deck_match.group(1).strip() if deck_match else "Default"
+    deck_dir = os.path.join(out_dir, re.sub(r'[^\w\s\-]', '', deck).strip())
+    os.makedirs(deck_dir, exist_ok=True)
     # Extract front field for filename
     front_match = re.search(r'## Front\n(.+?)(?=\n## |\Z)', note, re.DOTALL)
     front = front_match.group(1).strip() if front_match else "untitled"
     # Sanitize filename
     filename = re.sub(r'[^\w\s\-]', '', front)
     filename = re.sub(r'\s+', ' ', filename).strip()[:80]
-    filepath = os.path.join(out_dir, filename + ".md")
+    filepath = os.path.join(deck_dir, filename + ".md")
     # Handle duplicates
     if os.path.exists(filepath):
         nid_match = re.search(r'nid: (\d+)', note)
         nid = nid_match.group(1) if nid_match else str(len(created))
-        filepath = os.path.join(out_dir, filename + f"_{nid}.md")
+        filepath = os.path.join(deck_dir, filename + f"_{nid}.md")
     with open(filepath, 'w') as f:
         f.write(note + "\n")
-    created.append(os.path.basename(filepath))
+    created.append(os.path.join(deck, os.path.basename(filepath)))
 
 print(f"Exported {len(created)} notes to: {out_dir}")
 for name in created:
