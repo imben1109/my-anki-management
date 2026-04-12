@@ -1,34 +1,40 @@
 #!/bin/bash
 
-# Script to update Anki notes using apy CLI
-# Usage: ./update-anki-notes.sh <mode> <argument>
-# Modes:
-#   file <markdown_file>  - Update notes from markdown file
-#   edit <query>          - Interactively edit notes matching query
+# Script to update Anki notes using apy CLI one by one
+# Usage: ./update-anki-notes.sh <folder>
 
-MODE=${1:-""}
-ARGUMENT=${2:-""}
+FOLDER=${1:-""}
 
-if [ -z "$MODE" ] || [ -z "$ARGUMENT" ]; then
-  echo "Usage: $0 <mode> <argument>"
+if [ -z "$FOLDER" ]; then
+  echo "Usage: $0 <folder>"
   echo ""
-  echo "Modes:"
-  echo "  file <markdown_file>  - Update notes from markdown file"
-  echo "                          e.g., $0 file notes.md"
-  echo "  edit <query>          - Interactively edit notes matching query"
-  echo "                          e.g., $0 edit \"deck:English\""
+  echo "Updates all markdown notes in a folder one by one"
+  echo "Example: $0 notes/CFA\ Level\ 1\ Derivatives"
   exit 1
 fi
 
-case "$MODE" in
-  file)
-    if [ ! -f "$ARGUMENT" ]; then
-      echo "Error: File not found: $ARGUMENT"
-      exit 1
-    fi
+if [ ! -d "$FOLDER" ]; then
+  echo "Error: Directory not found: $FOLDER"
+  exit 1
+fi
+
+echo "Updating notes from folder: $FOLDER"
+echo ""
+
+file_count=0
+success_count=0
+
+for file in "$FOLDER"/*.md; do
+  if [ -f "$file" ]; then
+    file_count=$((file_count + 1))
+    filename=$(basename "$file")
+    echo -n "[$file_count] Updating: $filename ... "
+    
+    # Process individual file
     TMPFILE=$(mktemp /tmp/anki-update-XXXXXX.md)
     trap 'rm -f "$TMPFILE"' EXIT
-    python3 - "$ARGUMENT" "$TMPFILE" <<'PYEOF'
+    
+    python3 - "$file" "$TMPFILE" <<'PYEOF'
 import re
 import sys
 
@@ -38,61 +44,49 @@ target_path = sys.argv[2]
 with open(source_path, encoding="utf-8") as source_file:
     content = source_file.read().strip()
 
-
-def split_notes(text):
-    if re.search(r'^# Note', text, flags=re.MULTILINE):
-        return [part.strip() for part in re.split(r'(?=^# Note)', text, flags=re.MULTILINE) if part.strip()]
-    return [text]
-
-
 def capture_value(pattern, text):
     match = re.search(pattern, text, flags=re.MULTILINE)
     return match.group(1).strip() if match else ""
-
 
 def capture_section(name, text):
     match = re.search(rf'^## {re.escape(name)}\n(.*?)(?=^## |\Z)', text, flags=re.MULTILINE | re.DOTALL)
     return match.group(1).strip() if match else ""
 
+nid = capture_value(r'^# Note \(nid: ([^)]+)\)', content) or capture_value(r'^nid:\s*(.+)$', content)
+model = capture_value(r'^model:\s*(.+)$', content)
+model = re.sub(r'\s+\([0-9]+ cards\)$', '', model)
+tags = capture_value(r'^tags:\s*(.*)$', content)
+front = capture_section('Front', content)
+back = capture_section('Back', content)
 
-normalized_notes = []
-for index, note in enumerate(split_notes(content), start=1):
-    nid = capture_value(r'^# Note \(nid: ([^)]+)\)', note) or capture_value(r'^nid:\s*(.+)$', note)
-    cid = capture_value(r'^cid:\s*(.+)$', note)
-    model = capture_value(r'^model:\s*(.+)$', note)
-    model = re.sub(r'\s+\([0-9]+ cards\)$', '', model)
-    tags = capture_value(r'^tags:\s*(.*)$', note)
-    front = capture_section('Front', note)
-    back = capture_section('Back', note)
-
-    normalized = []
-    if model:
-        normalized.append(f'model: {model}')
-    normalized.append(f'tags: {tags}')
-    if nid:
-        normalized.append(f'nid: {nid}')
-    elif cid:
-        normalized.append(f'cid: {cid}')
-    normalized.append('')
-    normalized.append(f'# Note {index}')
-    normalized.append('## Front')
-    normalized.append(front)
-    normalized.append('')
-    normalized.append('## Back')
-    normalized.append(back)
-    normalized_notes.append('\n'.join(normalized).strip())
+normalized = []
+if model:
+    normalized.append(f'model: {model}')
+normalized.append(f'tags: {tags}')
+if nid:
+    normalized.append(f'nid: {nid}')
+normalized.append('')
+normalized.append('# Note')
+normalized.append('## Front')
+normalized.append(front)
+normalized.append('')
+normalized.append('## Back')
+normalized.append(back)
 
 with open(target_path, 'w', encoding='utf-8') as target_file:
-    target_file.write('\n\n'.join(normalized_notes) + '\n')
+    target_file.write('\n'.join(normalized) + '\n')
 PYEOF
-    apy update-from-file "$TMPFILE"
-    ;;
-  edit)
-    apy edit "$ARGUMENT"
-    ;;
-  *)
-    echo "Error: Unknown mode '$MODE'"
-    echo "Valid modes: file, edit"
-    exit 1
-    ;;
-esac
+
+    if apy update-from-file "$TMPFILE" > /dev/null 2>&1; then
+      success_count=$((success_count + 1))
+      echo "✓"
+    else
+      echo "✗"
+    fi
+    rm -f "$TMPFILE"
+  fi
+done
+
+echo ""
+echo "Summary: $success_count/$file_count files updated successfully"
+
