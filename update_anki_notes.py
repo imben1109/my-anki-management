@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Update Anki notes from markdown files using apy.
+"""Create or update Anki notes from markdown files using apy.
 
 Usage:
   python3 update_anki_notes.py <path>
@@ -59,9 +59,19 @@ def normalize_note_content(content: str) -> str:
     return "\n".join(normalized) + "\n"
 
 
-def update_note_file(md_file: Path) -> bool:
+def has_note_id(content: str) -> bool:
+    return bool(
+        capture_value(r"^# Note \(nid: ([^)]+)\)", content)
+        or capture_value(r"^nid:\s*(.+)$", content)
+        or capture_value(r"^cid:\s*(.+)$", content)
+    )
+
+
+def update_note_file(md_file: Path) -> tuple[bool, str]:
     with md_file.open("r", encoding="utf-8") as source_file:
         content = source_file.read()
+
+    action = "UPDATE" if has_note_id(content) else "CREATE"
 
     normalized = normalize_note_content(content)
 
@@ -77,7 +87,7 @@ def update_note_file(md_file: Path) -> bool:
             check=False,
             text=True,
         )
-        return result.returncode == 0
+        return result.returncode == 0, action
     finally:
         try:
             tmp_path.unlink(missing_ok=True)
@@ -111,13 +121,13 @@ def main() -> int:
         print("No markdown files found to update")
         return 1
 
-    print(f"Updating notes from: {target_path}")
+    print(f"Applying notes from: {target_path}")
     print("")
 
     success_count = 0
     for index, md_file in enumerate(md_files, start=1):
-        print(f"[{index}] Updating: {md_file.name} ... ", end="", flush=True)
-        ok = update_note_file(md_file)
+        ok, action = update_note_file(md_file)
+        print(f"[{index}] {action}: {md_file.name} ... ", end="", flush=True)
         if ok:
             success_count += 1
             print("OK")

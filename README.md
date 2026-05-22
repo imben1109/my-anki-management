@@ -104,6 +104,26 @@ Main scripts:
 
 1. `.github/skills/anki-decks/list-anki-decks.sh`
 2. `.github/skills/anki-list/list-anki-notes.sh`
+3. `export_anki_notes.py`
+4. `update_anki_notes.py`
+5. `anki_ui.py`
+
+## Desktop UI
+
+Use the Python desktop UI when you want a simple workflow for listing decks,
+exporting notes, and then updating notes.
+
+Run:
+
+```sh
+python3 anki_ui.py
+```
+
+What it can do:
+
+1. Load and display deck names from `apy info`.
+2. Export notes from a selected deck or a custom query by calling `export_anki_notes.py`.
+3. Update notes from a selected markdown file or folder by calling `update_anki_notes.py`.
 
 ## Usage
 

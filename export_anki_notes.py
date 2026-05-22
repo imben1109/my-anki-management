@@ -33,15 +33,15 @@ def html_to_md(text: str) -> str:
     text = re.sub(r"</ul>", "", text)
     text = re.sub(r"<ol>", "", text)
     text = re.sub(r"</ol>", "", text)
-    text = re.sub(r"<li>(.*?)</li>", r"- \\1", text, flags=re.DOTALL)
-    text = re.sub(r"<br\\s*/?>", "\n", text)
+    text = re.sub(r"<li>(.*?)</li>", r"- \1", text, flags=re.DOTALL)
+    text = re.sub(r"<br\s*/?>", "\n", text)
     text = re.sub(r"<[^>]+>", "", text)
     return text.strip()
 
 
 def sanitize_name(value: str) -> str:
-    value = re.sub(r"[^\\w\\s\\-]", "", value)
-    value = re.sub(r"\\s+", " ", value).strip()
+    value = re.sub(r"[^\w\s\-]", "", value)
+    value = re.sub(r"\s+", " ", value).strip()
     return value
 
 
@@ -91,6 +91,12 @@ def main() -> int:
                 flags=re.DOTALL | re.MULTILINE,
             )
 
+            nid_match = re.search(r"^# Note \(nid:\s*([^)]+)\)", note, re.MULTILINE)
+            if not nid_match:
+                nid_match = re.search(r"^nid:\s*(\d+)", note, re.MULTILINE)
+            nid = nid_match.group(1).strip() if nid_match else "no-nid"
+            safe_nid = sanitize_name(nid) or "no-nid"
+
             deck_match = re.search(r"^deck:\s*(.+)$", note, re.MULTILINE)
             deck = deck_match.group(1).strip() if deck_match else "Default"
             safe_deck = sanitize_name(deck) or "Default"
@@ -100,13 +106,12 @@ def main() -> int:
             front_match = re.search(r"## Front\n(.+?)(?=\n## |\Z)", note, re.DOTALL)
             front = front_match.group(1).strip() if front_match else "untitled"
 
-            filename = sanitize_name(front)[:80] or "untitled"
+            safe_front = sanitize_name(front)[:80] or "untitled"
+            filename = f"{safe_nid}_{safe_front}"
             filepath = os.path.join(deck_dir, f"{filename}.md")
 
             if os.path.exists(filepath):
-                nid_match = re.search(r"nid: (\\d+)", note)
-                nid = nid_match.group(1) if nid_match else str(len(created))
-                filepath = os.path.join(deck_dir, f"{filename}_{nid}.md")
+                filepath = os.path.join(deck_dir, f"{filename}_{len(created)}.md")
 
             with open(filepath, "w", encoding="utf-8") as out:
                 out.write(note + "\n")
