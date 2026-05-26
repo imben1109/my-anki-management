@@ -176,14 +176,24 @@ class AnkiManagerUI:
                 self.update_target_var.set(selected)
 
     def pick_update_target(self) -> None:
-        initial = self.update_target_var.get().strip() or self.output_var.get()
-        selected_dir = filedialog.askdirectory(initialdir=initial or str(self.base_dir))
+        initial = self.update_target_var.get().strip() or self.output_var.get().strip()
+        initial_path = Path(initial) if initial else self.base_dir
+
+        # macOS Tk dialogs are more reliable when initialdir points to an existing folder.
+        if initial_path.exists() and initial_path.is_file():
+            initial_dir = initial_path.parent
+        elif initial_path.exists() and initial_path.is_dir():
+            initial_dir = initial_path
+        else:
+            initial_dir = self.base_dir
+
+        selected_dir = filedialog.askdirectory(initialdir=str(initial_dir))
         if selected_dir:
             self.update_target_var.set(selected_dir)
             return
 
         selected_file = filedialog.askopenfilename(
-            initialdir=initial or str(self.base_dir),
+            initialdir=str(initial_dir),
             filetypes=[("Markdown", "*.md"), ("All files", "*.*")],
         )
         if selected_file:
