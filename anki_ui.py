@@ -7,6 +7,7 @@ import shlex
 import subprocess
 import sys
 import threading
+import uuid
 from pathlib import Path
 from typing import Callable
 
@@ -47,6 +48,7 @@ class AnkiManagerUI:
         self.selected_deck: str | None = None
         self.log_lines: list[str] = []
         self.active_jobs = 0
+        self.copilot_session_id = str(uuid.uuid4())
 
         default_output = str(self.base_dir / "anki-export")
 
@@ -63,6 +65,14 @@ class AnkiManagerUI:
         self.update_target_field = ft.TextField(
             label="Update target (.md file or directory)",
             value=default_output,
+            expand=True,
+        )
+        self.copilot_prompt_field = ft.TextField(
+            label="Ask GitHub Copilot",
+            hint_text="Ask about this Anki collection or request a change in this project.",
+            multiline=True,
+            min_lines=3,
+            max_lines=6,
             expand=True,
         )
 
@@ -94,6 +104,11 @@ class AnkiManagerUI:
             "Update notes",
             icon=ft.Icons.UPLOAD_FILE,
             on_click=self.update_notes,
+        )
+        self.copilot_button = ft.FilledButton(
+            "Send to Copilot",
+            icon=ft.Icons.SMART_TOY,
+            on_click=self.ask_copilot,
         )
 
         self.output_dir_picker = ft.FilePicker(on_result=self._handle_output_dir_picked)
@@ -205,6 +220,42 @@ class AnkiManagerUI:
             border_radius=14,
         )
 
+        copilot_card = ft.Container(
+            content=ft.Column(
+                controls=[
+                    ft.Row(
+                        controls=[
+                            ft.Text(
+                                "GitHub Copilot CLI",
+                                size=18,
+                                weight=ft.FontWeight.BOLD,
+                            ),
+                            ft.TextButton(
+                                "New conversation",
+                                on_click=self.reset_copilot_conversation,
+                            ),
+                        ],
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    ),
+                    self.copilot_prompt_field,
+                    ft.Row(
+                        controls=[
+                            self.copilot_button,
+                            ft.Text(
+                                "Responses appear in Status & logs.",
+                                color=ft.Colors.ON_SURFACE_VARIANT,
+                            ),
+                        ],
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                ],
+                spacing=12,
+            ),
+            padding=16,
+            border=ft.border.all(1, ft.Colors.OUTLINE_VARIANT),
+            border_radius=14,
+        )
+
         logs_card = ft.Container(
             content=ft.Column(
                 controls=[
@@ -230,7 +281,7 @@ class AnkiManagerUI:
         )
 
         right_panel = ft.Column(
-            controls=[export_card, update_card, logs_card],
+            controls=[export_card, update_card, copilot_card, logs_card],
             spacing=12,
             expand=2,
         )
@@ -517,6 +568,34 @@ class AnkiManagerUI:
 
         cmd = [sys.executable, str(self.update_script), str(target_path)]
         self._run_in_thread("Update", cmd)
+
+    def reset_copilot_conversation(
+        self, _event: ft.ControlEvent | None = None
+    ) -> None:
+        self.copilot_session_id = str(uuid.uuid4())
+        self.copilot_prompt_field.value = ""
+        self._append_log("Started a new GitHub Copilot conversation.")
+        self._set_status("Started a new GitHub Copilot conversation.", ft.Colors.GREEN_700)
+
+    def ask_copilot(self, _event: ft.ControlEvent | None = None) -> None:
+        prompt = self.copilot_prompt_field.value.strip()
+        if not prompt:
+            self._report_issue("Enter a prompt for GitHub Copilot first.")
+            return
+
+        cmd = [
+            "copilot",
+            "--prompt",
+            prompt,
+            "--session-id",
+            self.copilot_session_id,
+            "--allow-all-tools",
+            "--silent",
+            "--no-color",
+        ]
+        self.copilot_prompt_field.value = ""
+        self.page.update()
+        self._run_in_thread("GitHub Copilot", cmd)
 
 
 def main(page: ft.Page) -> None:
