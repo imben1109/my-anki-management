@@ -111,12 +111,25 @@ Main scripts:
 ## Desktop UI
 
 Use the Python desktop UI when you want a simple workflow for listing decks,
-exporting notes, and then updating notes.
+exporting notes, and then updating notes. The desktop app is now built with
+Flet.
 
-Run:
+Install the Python dependencies before launching it:
+
+```sh
+python3 -m pip install -r requirements.txt
+```
+
+Launch it with either:
 
 ```sh
 python3 anki_ui.py
+```
+
+Or, on macOS:
+
+```sh
+./run-anki-ui.command
 ```
 
 What it can do:
@@ -176,3 +189,10 @@ If the scripts cannot find your collection, check:
 3. `apy info` runs successfully.
 
 If a script prints a usage error, make sure you passed the required query argument to `list-anki-notes.sh`.
+
+If the desktop UI fails to start with a missing `flet` module error, install
+the project dependencies first:
+
+```sh
+python3 -m pip install -r requirements.txt
+```

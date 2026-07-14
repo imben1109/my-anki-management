@@ -1,21 +1,16 @@
 #!/usr/bin/env python3
-"""Simple Tkinter UI for Anki deck listing, export, and update workflows.
-
-Features:
-- List decks from `apy info`
-- Export notes for selected deck or custom query via export_anki_notes.py
-- Update notes from a selected markdown file or folder via update_anki_notes.py
-"""
+"""Flet UI for Anki deck listing, export, and update workflows."""
 
 from __future__ import annotations
 
-import queue
+import shlex
 import subprocess
 import sys
 import threading
 from pathlib import Path
-import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from typing import Callable
+
+import flet as ft
 
 
 def parse_decks(apy_info: str) -> list[str]:
@@ -34,114 +29,265 @@ def parse_decks(apy_info: str) -> list[str]:
 
 
 class AnkiManagerUI:
-    def __init__(self, root: tk.Tk) -> None:
-        self.root = root
-        self.root.title("Anki Manager UI")
-        self.root.geometry("980x640")
+    def __init__(self, page: ft.Page) -> None:
+        self.page = page
+        self.page.title = "Anki Manager UI"
+        self.page.padding = 16
+        self.page.theme_mode = ft.ThemeMode.SYSTEM
+        self.page.window_width = 1180
+        self.page.window_height = 760
+        self.page.window_min_width = 900
+        self.page.window_min_height = 620
 
         self.base_dir = Path(__file__).resolve().parent
         self.export_script = self.base_dir / "export_anki_notes.py"
         self.update_script = self.base_dir / "update_anki_notes.py"
 
-        self.log_queue: queue.Queue[str] = queue.Queue()
+        self.decks: list[str] = []
+        self.selected_deck: str | None = None
+        self.log_lines: list[str] = []
+        self.active_jobs = 0
+
+        default_output = str(self.base_dir / "anki-export")
+
+        self.output_field = ft.TextField(
+            label="Output folder",
+            value=default_output,
+            expand=True,
+        )
+        self.query_field = ft.TextField(
+            label="Custom query",
+            hint_text='Example: deck:"My Deck"',
+            expand=True,
+        )
+        self.update_target_field = ft.TextField(
+            label="Update target (.md file or directory)",
+            value=default_output,
+            expand=True,
+        )
+
+        self.status_text = ft.Text("Ready.", color=ft.Colors.ON_SURFACE_VARIANT)
+        self.progress_ring = ft.ProgressRing(width=16, height=16, visible=False)
+        self.deck_count_text = ft.Text("Decks: 0", color=ft.Colors.ON_SURFACE_VARIANT)
+        self.deck_list = ft.ListView(expand=True, spacing=8, padding=0)
+        self.log_field = ft.TextField(
+            value="",
+            multiline=True,
+            min_lines=16,
+            max_lines=24,
+            read_only=True,
+            expand=True,
+            text_size=13,
+        )
+
+        self.refresh_button = ft.ElevatedButton("Refresh decks", on_click=self.refresh_decks)
+        self.export_deck_button = ft.ElevatedButton(
+            "Export selected deck",
+            on_click=self.export_selected_deck,
+        )
+        self.export_query_button = ft.FilledButton(
+            "Export query",
+            icon=ft.Icons.DOWNLOAD,
+            on_click=self.export_custom_query,
+        )
+        self.update_button = ft.FilledButton(
+            "Update notes",
+            icon=ft.Icons.UPLOAD_FILE,
+            on_click=self.update_notes,
+        )
+
+        self.output_dir_picker = ft.FilePicker(on_result=self._handle_output_dir_picked)
+        self.update_dir_picker = ft.FilePicker(on_result=self._handle_update_dir_picked)
+        self.update_file_picker = ft.FilePicker(on_result=self._handle_update_file_picked)
+        self.page.overlay.extend(
+            [self.output_dir_picker, self.update_dir_picker, self.update_file_picker]
+        )
 
         self._build_ui()
-        self._poll_log_queue()
         self.refresh_decks()
 
     def _build_ui(self) -> None:
-        main = ttk.Frame(self.root, padding=12)
-        main.pack(fill=tk.BOTH, expand=True)
-
-        top = ttk.Frame(main)
-        top.pack(fill=tk.X, pady=(0, 8))
-
-        ttk.Label(top, text="Output folder:").pack(side=tk.LEFT)
-        self.output_var = tk.StringVar(value=str(self.base_dir / "anki-export"))
-        self.output_entry = ttk.Entry(top, textvariable=self.output_var)
-        self.output_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=8)
-        ttk.Button(top, text="Browse", command=self.pick_output_dir).pack(side=tk.LEFT)
-
-        body = ttk.Panedwindow(main, orient=tk.HORIZONTAL)
-        body.pack(fill=tk.BOTH, expand=True)
-
-        left = ttk.Frame(body, padding=8)
-        right = ttk.Frame(body, padding=8)
-        body.add(left, weight=1)
-        body.add(right, weight=2)
-
-        ttk.Label(left, text="Decks").pack(anchor=tk.W)
-
-        self.deck_list = tk.Listbox(left, height=20, exportselection=False)
-        self.deck_list.pack(fill=tk.BOTH, expand=True)
-
-        deck_buttons = ttk.Frame(left)
-        deck_buttons.pack(fill=tk.X, pady=(8, 0))
-        ttk.Button(deck_buttons, text="Refresh Decks", command=self.refresh_decks).pack(
-            side=tk.LEFT
+        left_panel = ft.Container(
+            content=ft.Column(
+                controls=[
+                    ft.Row(
+                        controls=[
+                            ft.Text("Decks", size=20, weight=ft.FontWeight.BOLD),
+                            self.deck_count_text,
+                        ],
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    ),
+                    ft.Row(
+                        controls=[self.refresh_button, self.export_deck_button],
+                        wrap=True,
+                    ),
+                    ft.Container(content=self.deck_list, expand=True),
+                ],
+                spacing=12,
+                expand=True,
+            ),
+            padding=16,
+            border=ft.border.all(1, ft.Colors.OUTLINE_VARIANT),
+            border_radius=14,
+            expand=1,
         )
-        ttk.Button(
-            deck_buttons,
-            text="Export Selected Deck",
-            command=self.export_selected_deck,
-        ).pack(side=tk.LEFT, padx=(8, 0))
 
-        query_box = ttk.LabelFrame(right, text="Export")
-        query_box.pack(fill=tk.X, pady=(0, 8))
+        export_card = ft.Container(
+            content=ft.Column(
+                controls=[
+                    ft.Text("Export", size=18, weight=ft.FontWeight.BOLD),
+                    ft.Row(
+                        controls=[
+                            self.output_field,
+                            ft.OutlinedButton(
+                                "Choose folder",
+                                icon=ft.Icons.FOLDER_OPEN,
+                                on_click=lambda _: self.output_dir_picker.get_directory_path(
+                                    initial_directory=self._existing_directory(
+                                        self.output_field.value
+                                    )
+                                ),
+                            ),
+                        ],
+                        vertical_alignment=ft.CrossAxisAlignment.END,
+                    ),
+                    ft.Row(
+                        controls=[self.query_field, self.export_query_button],
+                        vertical_alignment=ft.CrossAxisAlignment.END,
+                    ),
+                ],
+                spacing=12,
+            ),
+            padding=16,
+            border=ft.border.all(1, ft.Colors.OUTLINE_VARIANT),
+            border_radius=14,
+        )
 
-        query_row = ttk.Frame(query_box, padding=8)
-        query_row.pack(fill=tk.X)
-        ttk.Label(query_row, text="Custom query:").pack(side=tk.LEFT)
-        self.query_var = tk.StringVar(value="")
-        self.query_entry = ttk.Entry(query_row, textvariable=self.query_var)
-        self.query_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=8)
-        ttk.Button(
-            query_row,
-            text="Export Query",
-            command=self.export_custom_query,
-        ).pack(side=tk.LEFT)
+        update_card = ft.Container(
+            content=ft.Column(
+                controls=[
+                    ft.Text("Update", size=18, weight=ft.FontWeight.BOLD),
+                    ft.Row(
+                        controls=[
+                            self.update_target_field,
+                            ft.OutlinedButton(
+                                "Pick folder",
+                                icon=ft.Icons.FOLDER,
+                                on_click=lambda _: self.update_dir_picker.get_directory_path(
+                                    initial_directory=self._existing_directory(
+                                        self.update_target_field.value,
+                                        self.output_field.value,
+                                    )
+                                ),
+                            ),
+                            ft.OutlinedButton(
+                                "Pick file",
+                                icon=ft.Icons.DESCRIPTION,
+                                on_click=lambda _: self.update_file_picker.pick_files(
+                                    allow_multiple=False,
+                                    allowed_extensions=["md"],
+                                    file_type=ft.FilePickerFileType.CUSTOM,
+                                    initial_directory=self._existing_directory(
+                                        self.update_target_field.value,
+                                        self.output_field.value,
+                                    ),
+                                ),
+                            ),
+                        ],
+                        vertical_alignment=ft.CrossAxisAlignment.END,
+                    ),
+                    ft.Row(controls=[self.update_button], wrap=True),
+                ],
+                spacing=12,
+            ),
+            padding=16,
+            border=ft.border.all(1, ft.Colors.OUTLINE_VARIANT),
+            border_radius=14,
+        )
 
-        update_box = ttk.LabelFrame(right, text="Update")
-        update_box.pack(fill=tk.X, pady=(0, 8))
+        logs_card = ft.Container(
+            content=ft.Column(
+                controls=[
+                    ft.Row(
+                        controls=[
+                            ft.Text("Status & logs", size=18, weight=ft.FontWeight.BOLD),
+                            ft.Row(
+                                controls=[self.progress_ring, self.status_text],
+                                spacing=10,
+                            ),
+                        ],
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    ),
+                    self.log_field,
+                ],
+                spacing=12,
+                expand=True,
+            ),
+            padding=16,
+            border=ft.border.all(1, ft.Colors.OUTLINE_VARIANT),
+            border_radius=14,
+            expand=True,
+        )
 
-        update_row = ttk.Frame(update_box, padding=8)
-        update_row.pack(fill=tk.X)
-        self.update_target_var = tk.StringVar(value=self.output_var.get())
-        ttk.Label(update_row, text="Target file/folder:").pack(side=tk.LEFT)
-        self.update_entry = ttk.Entry(update_row, textvariable=self.update_target_var)
-        self.update_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=8)
-        ttk.Button(update_row, text="Pick", command=self.pick_update_target).pack(side=tk.LEFT)
+        right_panel = ft.Column(
+            controls=[export_card, update_card, logs_card],
+            spacing=12,
+            expand=2,
+        )
 
-        update_buttons = ttk.Frame(update_box, padding=(8, 0, 8, 8))
-        update_buttons.pack(fill=tk.X)
-        ttk.Button(
-            update_buttons,
-            text="Update Notes",
-            command=self.update_notes,
-        ).pack(side=tk.LEFT)
+        self.page.add(
+            ft.Row(
+                controls=[left_panel, right_panel],
+                spacing=16,
+                expand=True,
+                vertical_alignment=ft.CrossAxisAlignment.START,
+            )
+        )
 
-        log_box = ttk.LabelFrame(right, text="Logs")
-        log_box.pack(fill=tk.BOTH, expand=True)
+    def _existing_directory(self, *raw_values: str | None) -> str:
+        for raw_value in raw_values:
+            value = (raw_value or "").strip()
+            if not value:
+                continue
+            path = Path(value)
+            if path.exists() and path.is_dir():
+                return str(path)
+            if path.exists() and path.is_file():
+                return str(path.parent)
+        return str(self.base_dir)
 
-        self.log_text = tk.Text(log_box, height=20, wrap=tk.WORD)
-        self.log_text.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+    def _set_status(self, message: str, color: str = ft.Colors.ON_SURFACE_VARIANT) -> None:
+        self.status_text.value = message
+        self.status_text.color = color
+        self.page.update()
 
     def _append_log(self, text: str) -> None:
-        self.log_text.insert(tk.END, text + "\n")
-        self.log_text.see(tk.END)
+        self.log_lines.append(text)
+        self.log_field.value = "\n".join(self.log_lines)
+        self.page.update()
 
-    def _poll_log_queue(self) -> None:
-        while True:
-            try:
-                line = self.log_queue.get_nowait()
-            except queue.Empty:
-                break
-            self._append_log(line)
-        self.root.after(150, self._poll_log_queue)
+    def _set_busy(self, busy: bool) -> None:
+        self.active_jobs += 1 if busy else -1
+        if self.active_jobs < 0:
+            self.active_jobs = 0
+        self.progress_ring.visible = self.active_jobs > 0
+        self.page.update()
 
-    def _run_in_thread(self, title: str, argv: list[str], on_success=None) -> None:
+    def _report_issue(self, message: str) -> None:
+        self._append_log(message)
+        self._set_status(message, ft.Colors.RED_700)
+
+    def _run_in_thread(
+        self,
+        title: str,
+        argv: list[str],
+        on_success: Callable[[], None] | None = None,
+    ) -> None:
+        self._append_log(f"$ {shlex.join(argv)}")
+        self._set_status(f"{title} running...", ft.Colors.BLUE_700)
+        self._set_busy(True)
+
         def worker() -> None:
-            self.log_queue.put(f"$ {' '.join(argv)}")
             try:
                 result = subprocess.run(
                     argv,
@@ -151,155 +297,231 @@ class AnkiManagerUI:
                     check=False,
                 )
             except FileNotFoundError as exc:
-                self.log_queue.put(f"{title} failed: {exc}")
+                self._report_issue(f"{title} failed: {exc}")
+                self._set_busy(False)
+                return
+            except Exception as exc:
+                self._report_issue(f"{title} failed unexpectedly: {exc}")
+                self._set_busy(False)
                 return
 
             if result.stdout.strip():
-                self.log_queue.put(result.stdout.rstrip())
+                self._append_log(result.stdout.rstrip())
             if result.stderr.strip():
-                self.log_queue.put(result.stderr.rstrip())
+                self._append_log(result.stderr.rstrip())
 
             if result.returncode == 0:
-                self.log_queue.put(f"{title} completed successfully.")
+                self._append_log(f"{title} completed successfully.")
+                self._set_status(f"{title} completed successfully.", ft.Colors.GREEN_700)
                 if on_success:
-                    self.root.after(0, on_success)
+                    on_success()
             else:
-                self.log_queue.put(f"{title} failed with exit code {result.returncode}.")
+                self._append_log(f"{title} failed with exit code {result.returncode}.")
+                self._set_status(
+                    f"{title} failed with exit code {result.returncode}.",
+                    ft.Colors.RED_700,
+                )
+
+            self._set_busy(False)
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def pick_output_dir(self) -> None:
-        selected = filedialog.askdirectory(initialdir=self.output_var.get() or str(self.base_dir))
-        if selected:
-            self.output_var.set(selected)
-            if not self.update_target_var.get().strip():
-                self.update_target_var.set(selected)
-
-    def pick_update_target(self) -> None:
-        initial = self.update_target_var.get().strip() or self.output_var.get().strip()
-        initial_path = Path(initial) if initial else self.base_dir
-
-        # macOS Tk dialogs are more reliable when initialdir points to an existing folder.
-        if initial_path.exists() and initial_path.is_file():
-            initial_dir = initial_path.parent
-        elif initial_path.exists() and initial_path.is_dir():
-            initial_dir = initial_path
-        else:
-            initial_dir = self.base_dir
-
-        selected_dir = filedialog.askdirectory(initialdir=str(initial_dir))
-        if selected_dir:
-            self.update_target_var.set(selected_dir)
+    def _handle_output_dir_picked(self, event: ft.FilePickerResultEvent) -> None:
+        if not event.path:
             return
+        self.output_field.value = event.path
+        if not self.update_target_field.value.strip():
+            self.update_target_field.value = event.path
+        self.page.update()
 
-        selected_file = filedialog.askopenfilename(
-            initialdir=str(initial_dir),
-            filetypes=[("Markdown", "*.md"), ("All files", "*.*")],
-        )
-        if selected_file:
-            self.update_target_var.set(selected_file)
+    def _handle_update_dir_picked(self, event: ft.FilePickerResultEvent) -> None:
+        if not event.path:
+            return
+        self.update_target_field.value = event.path
+        self.page.update()
 
-    def refresh_decks(self) -> None:
-        try:
-            result = subprocess.run(
-                ["apy", "info"],
-                cwd=str(self.base_dir),
-                capture_output=True,
-                text=True,
-                check=False,
+    def _handle_update_file_picked(self, event: ft.FilePickerResultEvent) -> None:
+        if not event.files:
+            return
+        self.update_target_field.value = event.files[0].path
+        self.page.update()
+
+    def _render_decks(self) -> None:
+        deck_controls: list[ft.Control] = []
+        for deck_name in self.decks:
+            is_selected = deck_name == self.selected_deck
+            deck_controls.append(
+                ft.Container(
+                    content=ft.ListTile(
+                        title=ft.Text(
+                            deck_name,
+                            weight=ft.FontWeight.W_600 if is_selected else None,
+                        ),
+                        dense=True,
+                    ),
+                    bgcolor=ft.Colors.BLUE_50 if is_selected else ft.Colors.SURFACE,
+                    border=ft.border.all(
+                        1,
+                        ft.Colors.BLUE_300 if is_selected else ft.Colors.OUTLINE_VARIANT,
+                    ),
+                    border_radius=10,
+                    on_click=lambda _, selected=deck_name: self._select_deck(selected),
+                )
             )
-        except FileNotFoundError:
-            messagebox.showerror("apy not found", "Could not find 'apy' on PATH.")
-            return
 
-        if result.returncode != 0:
-            messagebox.showerror("Failed to load decks", result.stderr or result.stdout)
-            return
+        if not deck_controls:
+            deck_controls.append(
+                ft.Container(
+                    content=ft.Text(
+                        "No decks loaded yet.",
+                        color=ft.Colors.ON_SURFACE_VARIANT,
+                        italic=True,
+                    ),
+                    padding=ft.padding.only(top=8),
+                )
+            )
 
-        decks = parse_decks(result.stdout)
-        self.deck_list.delete(0, tk.END)
-        for deck in decks:
-            self.deck_list.insert(tk.END, deck)
+        self.deck_list.controls = deck_controls
+        self.deck_count_text.value = f"Decks: {len(self.decks)}"
+        self.page.update()
 
-        self._append_log(f"Loaded {len(decks)} deck(s).")
+    def _select_deck(self, deck_name: str) -> None:
+        self.selected_deck = deck_name
+        self._render_decks()
+
+    def refresh_decks(self, _event: ft.ControlEvent | None = None) -> None:
+        previous_deck = self.selected_deck
+        self._append_log("$ apy info")
+        self._set_status("Loading decks...", ft.Colors.BLUE_700)
+        self._set_busy(True)
+
+        def worker() -> None:
+            try:
+                result = subprocess.run(
+                    ["apy", "info"],
+                    cwd=str(self.base_dir),
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+            except FileNotFoundError:
+                self._report_issue("Failed to load decks: could not find 'apy' on PATH.")
+                self._set_busy(False)
+                return
+            except Exception as exc:
+                self._report_issue(f"Failed to load decks: {exc}")
+                self._set_busy(False)
+                return
+
+            if result.stdout.strip():
+                self._append_log(result.stdout.rstrip())
+            if result.stderr.strip():
+                self._append_log(result.stderr.rstrip())
+
+            if result.returncode != 0:
+                self._append_log(f"Deck refresh failed with exit code {result.returncode}.")
+                self._set_status(
+                    f"Deck refresh failed with exit code {result.returncode}.",
+                    ft.Colors.RED_700,
+                )
+                self._set_busy(False)
+                return
+
+            decks = parse_decks(result.stdout)
+            self.decks = decks
+            if previous_deck in decks:
+                self.selected_deck = previous_deck
+            elif self.selected_deck in decks:
+                pass
+            else:
+                self.selected_deck = decks[0] if decks else None
+            self._render_decks()
+            self._append_log(f"Loaded {len(decks)} deck(s).")
+            self._set_status(f"Loaded {len(decks)} deck(s).", ft.Colors.GREEN_700)
+            self._set_busy(False)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _ensure_scripts(self) -> bool:
-        if not self.export_script.exists() or not self.update_script.exists():
-            messagebox.showerror(
-                "Missing scripts",
-                "Expected export_anki_notes.py and update_anki_notes.py next to this UI script.",
+        missing = [
+            str(path.name)
+            for path in (self.export_script, self.update_script)
+            if not path.exists()
+        ]
+        if missing:
+            self._report_issue(
+                "Missing script(s): "
+                + ", ".join(missing)
+                + ". Expected them next to anki_ui.py."
             )
             return False
         return True
 
     def _deck_query(self, deck_name: str) -> str:
-        escaped = deck_name.replace('"', r'\"')
+        escaped = deck_name.replace('"', r"\"")
         return f'deck:"{escaped}"'
 
-    def export_selected_deck(self) -> None:
+    def export_selected_deck(self, _event: ft.ControlEvent | None = None) -> None:
         if not self._ensure_scripts():
             return
-
-        selection = self.deck_list.curselection()
-        if not selection:
-            messagebox.showinfo("No deck selected", "Select a deck first.")
+        if not self.selected_deck:
+            self._report_issue("No deck selected. Select a deck first.")
             return
 
-        deck_name = self.deck_list.get(selection[0])
-        query = self._deck_query(deck_name)
-        self.query_var.set(query)
+        query = self._deck_query(self.selected_deck)
+        self.query_field.value = query
+        self.page.update()
         self._run_export(query)
 
-    def export_custom_query(self) -> None:
+    def export_custom_query(self, _event: ft.ControlEvent | None = None) -> None:
         if not self._ensure_scripts():
             return
 
-        query = self.query_var.get().strip()
+        query = self.query_field.value.strip()
         if not query:
-            messagebox.showinfo("Missing query", "Enter an Anki query.")
+            self._report_issue("Missing query. Enter an Anki query first.")
             return
 
         self._run_export(query)
 
     def _run_export(self, query: str) -> None:
-        output_dir = self.output_var.get().strip()
+        output_dir = self.output_field.value.strip()
         if not output_dir:
-            messagebox.showinfo("Missing output folder", "Choose an output folder.")
+            self._report_issue("Missing output folder. Choose an output folder first.")
             return
 
         cmd = [sys.executable, str(self.export_script), query, output_dir]
 
         def on_success() -> None:
-            if not self.update_target_var.get().strip():
-                self.update_target_var.set(output_dir)
+            if not self.update_target_field.value.strip():
+                self.update_target_field.value = output_dir
+                self.page.update()
 
         self._run_in_thread("Export", cmd, on_success=on_success)
 
-    def update_notes(self) -> None:
+    def update_notes(self, _event: ft.ControlEvent | None = None) -> None:
         if not self._ensure_scripts():
             return
 
-        target = self.update_target_var.get().strip()
+        target = self.update_target_field.value.strip()
         if not target:
-            messagebox.showinfo("Missing target", "Choose a markdown file or folder to update.")
+            self._report_issue(
+                "Missing target. Choose a markdown file or directory to update."
+            )
             return
 
         target_path = Path(target)
         if not target_path.exists():
-            messagebox.showerror("Path not found", f"Target path does not exist:\n{target}")
+            self._report_issue(f"Target path does not exist: {target}")
             return
 
         cmd = [sys.executable, str(self.update_script), str(target_path)]
         self._run_in_thread("Update", cmd)
 
 
-def main() -> int:
-    root = tk.Tk()
-    app = AnkiManagerUI(root)
-    _ = app
-    root.mainloop()
-    return 0
+def main(page: ft.Page) -> None:
+    AnkiManagerUI(page)
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    ft.app(target=main)
