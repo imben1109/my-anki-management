@@ -136,14 +136,16 @@ What it can do:
 
 1. Load and display deck names from `apy info`.
 2. Export notes from a selected deck or a custom query by calling `export_anki_notes.py`.
-3. Update notes from a selected markdown file or folder by calling `update_anki_notes.py`.
-4. Send prompts to the installed GitHub Copilot CLI from the app and view replies
+3. Preview the newest exported Markdown note, or select any exported Markdown file from the
+   dedicated, full-size preview workspace.
+4. Update notes from a selected markdown file or folder by calling `update_anki_notes.py`.
+5. Send prompts to the installed GitHub Copilot CLI from the app and view replies
    in the status log. Consecutive prompts share a conversation until **New
    conversation** is selected.
 
 The Copilot panel requires the `copilot` command to be installed and
-authenticated. It runs from this repository and grants Copilot permission to
-use its tools so prompt mode can complete non-interactively.
+authenticated. It runs from this repository with all Copilot permissions
+enabled so prompt mode can complete non-interactively.
 
 ## Usage
 
