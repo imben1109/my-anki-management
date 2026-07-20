@@ -60,7 +60,9 @@ class AnkiManagerUI:
         self.preview_files: list[Path] = []
         self.preview_load_request = 0
         self.log_lines: list[str] = []
+        self.copilot_log_lines: list[str] = []
         self.active_jobs = 0
+        self.copilot_active_jobs = 0
         self.copilot_session_id = str(uuid.uuid4())
 
         default_output = str(self.base_dir / "anki-export")
@@ -111,6 +113,21 @@ class AnkiManagerUI:
             multiline=True,
             min_lines=16,
             max_lines=24,
+            read_only=True,
+            expand=True,
+            text_size=13,
+        )
+        self.copilot_status_text = ft.Text(
+            "Ready.", color=ft.Colors.ON_SURFACE_VARIANT
+        )
+        self.copilot_progress_ring = ft.ProgressRing(
+            width=16, height=16, visible=False
+        )
+        self.copilot_log_field = ft.TextField(
+            value="",
+            multiline=True,
+            min_lines=8,
+            max_lines=12,
             read_only=True,
             expand=True,
             text_size=13,
@@ -339,6 +356,7 @@ class AnkiManagerUI:
             border=ft.border.all(1, ft.Colors.OUTLINE_VARIANT),
             border_radius=14,
         )
+        preview_workspace.content.controls.append(copilot_card)
 
         logs_card = ft.Container(
             content=ft.Column(
@@ -363,9 +381,34 @@ class AnkiManagerUI:
             border_radius=14,
             expand=True,
         )
+        copilot_output_card = ft.Container(
+            content=ft.Column(
+                controls=[
+                    ft.Row(
+                        controls=[
+                            ft.Text("Copilot output", size=18, weight=ft.FontWeight.BOLD),
+                            ft.Row(
+                                controls=[
+                                    self.copilot_progress_ring,
+                                    self.copilot_status_text,
+                                ],
+                                spacing=10,
+                            ),
+                        ],
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    ),
+                    self.copilot_log_field,
+                ],
+                spacing=12,
+            ),
+            padding=16,
+            border=ft.border.all(1, ft.Colors.OUTLINE_VARIANT),
+            border_radius=14,
+        )
+        preview_workspace.content.controls.append(copilot_output_card)
 
         right_panel = ft.Column(
-            controls=[export_card, update_card, copilot_card, logs_card],
+            controls=[export_card, update_card, logs_card],
             spacing=12,
             expand=2,
         )
@@ -378,7 +421,7 @@ class AnkiManagerUI:
         )
         self.manage_workspace = manage_workspace
         self.preview_workspace = preview_workspace
-        self.preview_workspace.visible = False
+        self.manage_workspace.visible = False
         workspace_navigation = ft.Row(
             controls=[
                 ft.FilledButton(
@@ -428,6 +471,18 @@ class AnkiManagerUI:
         self.log_field.value = "\n".join(self.log_lines)
         self.page.update()
 
+    def _set_copilot_status(
+        self, message: str, color: str = ft.Colors.ON_SURFACE_VARIANT
+    ) -> None:
+        self.copilot_status_text.value = message
+        self.copilot_status_text.color = color
+        self.page.update()
+
+    def _append_copilot_log(self, text: str) -> None:
+        self.copilot_log_lines.append(text)
+        self.copilot_log_field.value = "\n".join(self.copilot_log_lines)
+        self.page.update()
+
     def _set_busy(self, busy: bool) -> None:
         self.active_jobs += 1 if busy else -1
         if self.active_jobs < 0:
@@ -435,19 +490,38 @@ class AnkiManagerUI:
         self.progress_ring.visible = self.active_jobs > 0
         self.page.update()
 
+    def _set_copilot_busy(self, busy: bool) -> None:
+        self.copilot_active_jobs += 1 if busy else -1
+        if self.copilot_active_jobs < 0:
+            self.copilot_active_jobs = 0
+        self.copilot_progress_ring.visible = self.copilot_active_jobs > 0
+        self.page.update()
+
     def _report_issue(self, message: str) -> None:
         self._append_log(message)
         self._set_status(message, ft.Colors.RED_700)
+
+    def _report_copilot_issue(self, message: str) -> None:
+        self._append_copilot_log(message)
+        self._set_copilot_status(message, ft.Colors.RED_700)
 
     def _run_in_thread(
         self,
         title: str,
         argv: list[str],
         on_success: Callable[[], None] | None = None,
+        append_log: Callable[[str], None] | None = None,
+        set_status: Callable[[str, str], None] | None = None,
+        set_busy: Callable[[bool], None] | None = None,
+        report_issue: Callable[[str], None] | None = None,
     ) -> None:
-        self._append_log(f"$ {shlex.join(argv)}")
-        self._set_status(f"{title} running...", ft.Colors.BLUE_700)
-        self._set_busy(True)
+        append_log = append_log or self._append_log
+        set_status = set_status or self._set_status
+        set_busy = set_busy or self._set_busy
+        report_issue = report_issue or self._report_issue
+        append_log(f"$ {shlex.join(argv)}")
+        set_status(f"{title} running...", ft.Colors.BLUE_700)
+        set_busy(True)
 
         def worker() -> None:
             try:
@@ -459,32 +533,32 @@ class AnkiManagerUI:
                     check=False,
                 )
             except FileNotFoundError as exc:
-                self._report_issue(f"{title} failed: {exc}")
-                self._set_busy(False)
+                report_issue(f"{title} failed: {exc}")
+                set_busy(False)
                 return
             except Exception as exc:
-                self._report_issue(f"{title} failed unexpectedly: {exc}")
-                self._set_busy(False)
+                report_issue(f"{title} failed unexpectedly: {exc}")
+                set_busy(False)
                 return
 
             if result.stdout.strip():
-                self._append_log(result.stdout.rstrip())
+                append_log(result.stdout.rstrip())
             if result.stderr.strip():
-                self._append_log(result.stderr.rstrip())
+                append_log(result.stderr.rstrip())
 
             if result.returncode == 0:
-                self._append_log(f"{title} completed successfully.")
-                self._set_status(f"{title} completed successfully.", ft.Colors.GREEN_700)
+                append_log(f"{title} completed successfully.")
+                set_status(f"{title} completed successfully.", ft.Colors.GREEN_700)
                 if on_success:
                     on_success()
             else:
-                self._append_log(f"{title} failed with exit code {result.returncode}.")
-                self._set_status(
+                append_log(f"{title} failed with exit code {result.returncode}.")
+                set_status(
                     f"{title} failed with exit code {result.returncode}.",
                     ft.Colors.RED_700,
                 )
 
-            self._set_busy(False)
+            set_busy(False)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -635,7 +709,7 @@ class AnkiManagerUI:
                     except OSError:
                         continue
             except OSError as exc:
-                self._report_issue(f"Could not list exported Markdown files: {exc}")
+                self._report_copilot_issue(f"Could not list exported Markdown files: {exc}")
                 return
 
         self.preview_files = [
@@ -644,6 +718,8 @@ class AnkiManagerUI:
         if self.selected_preview_path not in self.preview_files:
             self.selected_preview_path = None
         self._render_preview_file_list()
+        if self.selected_preview_path is None and self.preview_files:
+            self._preview_markdown_file(self.preview_files[0])
 
     def _render_preview_file_list(self) -> None:
         controls: list[ft.Control] = []
@@ -695,22 +771,22 @@ class AnkiManagerUI:
         self.preview_path_text.value = str(path)
         self.show_preview_workspace()
         self._render_preview_file_list()
-        self._set_status(f"Loading {path.name}...", ft.Colors.BLUE_700)
+        self._set_copilot_status(f"Loading {path.name}...", ft.Colors.BLUE_700)
 
         def worker() -> None:
             try:
                 markdown = path.read_text(encoding="utf-8")
             except (OSError, UnicodeDecodeError) as exc:
                 if request == self.preview_load_request:
-                    self._report_issue(f"Could not preview Markdown file {path}: {exc}")
+                    self._report_copilot_issue(f"Could not preview Markdown file {path}: {exc}")
                 return
 
             if request != self.preview_load_request:
                 return
 
             self.markdown_preview.value = markdown
-            self._append_log(f"Previewing Markdown file: {path}")
-            self._set_status(f"Previewing {path.name}.", ft.Colors.GREEN_700)
+            self._append_copilot_log(f"Previewing Markdown file: {path}")
+            self._set_copilot_status(f"Previewing {path.name}.", ft.Colors.GREEN_700)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -899,13 +975,15 @@ class AnkiManagerUI:
     ) -> None:
         self.copilot_session_id = str(uuid.uuid4())
         self.copilot_prompt_field.value = ""
-        self._append_log("Started a new GitHub Copilot conversation.")
-        self._set_status("Started a new GitHub Copilot conversation.", ft.Colors.GREEN_700)
+        self._append_copilot_log("Started a new GitHub Copilot conversation.")
+        self._set_copilot_status(
+            "Started a new GitHub Copilot conversation.", ft.Colors.GREEN_700
+        )
 
     def ask_copilot(self, _event: ft.ControlEvent | None = None) -> None:
         prompt = self.copilot_prompt_field.value.strip()
         if not prompt:
-            self._report_issue("Enter a prompt for GitHub Copilot first.")
+            self._report_copilot_issue("Enter a prompt for GitHub Copilot first.")
             return
 
         cmd = [
@@ -920,7 +998,14 @@ class AnkiManagerUI:
         ]
         self.copilot_prompt_field.value = ""
         self.page.update()
-        self._run_in_thread("GitHub Copilot", cmd)
+        self._run_in_thread(
+            "GitHub Copilot",
+            cmd,
+            append_log=self._append_copilot_log,
+            set_status=self._set_copilot_status,
+            set_busy=self._set_copilot_busy,
+            report_issue=self._report_copilot_issue,
+        )
 
 
 def main(page: ft.Page) -> None:

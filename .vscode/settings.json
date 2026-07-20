@@ -1,5 +1,7 @@
 {
     "chat.tools.terminal.autoApprove": {
         "./list-anki-decks.sh": true
-    }
+    },
+    "chat.utilityModel": "Main Agent Model",
+    "chat.utilitySmallModel": "deepseek/deepseek-v4-flash"
 }
