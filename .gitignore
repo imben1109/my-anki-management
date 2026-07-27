@@ -2,3 +2,4 @@ anki-export/
 __pycache__/
 .venv/
 Anki Manager.app/
+build/
