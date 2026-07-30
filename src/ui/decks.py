@@ -137,12 +137,14 @@ class _DecksMixin:
         if not self._ensure_scripts():
             return
         if not self.selected_deck:
-            self._report_issue("No deck selected. Click a deck in the list first.")
-            self._set_status("No deck selected.", ft.Colors.RED_700)
+            self._set_status("Select a deck first!", ft.Colors.RED_700)
+            self.page.open(ft.AlertDialog(
+                title=ft.Text("No deck selected"),
+                content=ft.Text("Click a deck name in the list first, then try export again."),
+            ))
             return
         if not self.decks:
-            self._report_issue("No decks loaded. Click 'Refresh decks' first.")
-            self._set_status("No decks loaded.", ft.Colors.RED_700)
+            self._set_status("No decks loaded. Click 'Refresh decks'.", ft.Colors.RED_700)
             return
 
         query = self._deck_query(self.selected_deck)
@@ -166,44 +168,70 @@ class _DecksMixin:
     def _run_export(self, query: str) -> None:
         output_dir = self.output_field.value.strip()
         if not output_dir:
-            self._report_issue("Missing output folder. Choose an output folder first.")
+            self._set_status("Choose an output folder first!", ft.Colors.RED_700)
             return
 
         output_path = Path(output_dir)
+        # Compute the deck-specific subfolder using same sanitization as export.py
+        deck_name = self.selected_deck or "Default"
+        safe_deck = re.sub(r"[^\w\s\-]", "", deck_name)
+        safe_deck = re.sub(r"\s+", " ", safe_deck).strip() or "Default"
+        deck_folder = output_path / safe_deck
 
-        # If folder already has exported files, prompt for confirmation
-        if output_path.exists() and list(output_path.rglob("*.md")):
-            def _confirm_delete(_e: ft.ControlEvent) -> None:
-                self.page.dialog.open = False
-                self.page.update()
-                shutil.rmtree(output_path)
-                self._append_log(f"Deleted existing export folder: {output_dir}")
-                self._do_export(query, output_dir, output_path)
-
-            def _cancel(_e: ft.ControlEvent) -> None:
-                self.page.dialog.open = False
-                self.page.update()
-                self._append_log("Export cancelled.")
-
-            self.page.dialog = ft.AlertDialog(
-                title=ft.Text("Folder already exists"),
-                content=ft.Text(
-                    f"The folder \"{output_dir}\" already contains exported markdown files. "
-                    f"Delete it and re-export?"
-                ),
-                actions=[
-                    ft.TextButton("Cancel", on_click=_cancel),
-                    ft.FilledButton("Delete & Export", on_click=_confirm_delete),
-                ],
-            )
-            self.page.dialog.open = True
-            self.page.update()
+        # If deck folder already exists, prompt for confirmation
+        if deck_folder.exists() and any(deck_folder.iterdir()):
+            self._show_export_confirm_dialog(query, output_dir, output_path, deck_folder)
         else:
             self._do_export(query, output_dir, output_path)
 
 
+    def _show_export_confirm_dialog(
+        self, query: str, output_dir: str, output_path: Path, deck_folder: Path
+    ) -> None:
+        print(f"DEBUG: _show_export_confirm_dialog for {deck_folder}", flush=True)
+        dialog = ft.AlertDialog(
+            title=ft.Text("Deck folder already exists"),
+            content=ft.Text(
+                f'The folder "{deck_folder.name}" already exists in the export directory. '
+                f"Delete it and re-export?"
+            ),
+            actions=[
+                ft.TextButton("Cancel", on_click=lambda e: self.page.close(dialog)),
+                ft.FilledButton(
+                    "Delete & Export",
+                    on_click=lambda e: self._confirm_export_delete(
+                        e, dialog, query, output_dir, output_path, deck_folder
+                    ),
+                ),
+            ],
+        )
+        print("DEBUG: opening dialog", flush=True)
+        self.page.open(dialog)
+        print("DEBUG: dialog opened", flush=True)
+
+
+    def _confirm_export_delete(
+        self,
+        e: ft.ControlEvent,
+        dialog: ft.AlertDialog,
+        query: str,
+        output_dir: str,
+        output_path: Path,
+        deck_folder: Path,
+    ) -> None:
+        print("DEBUG: _confirm_export_delete called", flush=True)
+        self.page.close(dialog)
+        print(f"DEBUG: dialog closed, deleting {deck_folder}", flush=True)
+        shutil.rmtree(deck_folder)
+        self._append_log(f"Deleted: {deck_folder}")
+        print("DEBUG: calling _do_export", flush=True)
+        self._do_export(query, output_dir, output_path)
+
+
     def _do_export(self, query: str, output_dir: str, output_path: Path) -> None:
+        print(f"DEBUG: _do_export query={query}, dir={output_dir}", flush=True)
         cmd = [sys.executable, str(self.export_script), query, output_dir]
+        print(f"DEBUG: cmd={cmd}", flush=True)
 
         def on_success() -> None:
             if not self.update_target_field.value.strip():

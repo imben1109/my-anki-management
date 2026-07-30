@@ -14,4 +14,4 @@ from src.ui.app import main
 
 
 if __name__ == "__main__":
-    ft.app(target=main, port=8550)
+    ft.app(target=main, view=ft.AppView.WEB_BROWSER, port=8550)
