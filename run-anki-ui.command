@@ -23,4 +23,4 @@ if ! python3 -c "import flet" >/dev/null 2>&1; then
   fi
 fi
 
-exec python3 anki_ui.py
+exec python3 src/main.py

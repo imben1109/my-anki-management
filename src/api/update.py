@@ -25,7 +25,7 @@ def capture_value(pattern: str, text: str) -> str:
 
 
 def capture_section(name: str, text: str) -> str:
-    pattern = rf"^## {re.escape(name)}\n(.*?)(?=^## |\Z)"
+    pattern = rf"^## {re.escape(name)}(?:\s+\(markdown\))?\n(.*?)(?=^## |\Z)"
     match = re.search(pattern, text, flags=re.MULTILINE | re.DOTALL)
     return match.group(1).strip() if match else ""
 
@@ -41,6 +41,7 @@ def normalize_note_content(content: str) -> str:
     tags = capture_value(r"^tags:\s*(.*)$", content)
     front = capture_section("Front", content)
     back = capture_section("Back", content)
+    image = capture_section("Image", content)
 
     normalized: list[str] = []
     if model:
@@ -55,6 +56,10 @@ def normalize_note_content(content: str) -> str:
     normalized.append("")
     normalized.append("## Back")
     normalized.append(back)
+    if image:
+        normalized.append("")
+        normalized.append("## Image")
+        normalized.append(image)
 
     return "\n".join(normalized) + "\n"
 

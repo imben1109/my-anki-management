@@ -2,7 +2,7 @@
 
 from setuptools import setup
 
-APP = ["anki_ui.py"]
+APP = ["src/main.py"]
 DATA_FILES: list[str] = []
 OPTIONS = {
     "argv_emulation": False,
