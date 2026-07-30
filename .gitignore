@@ -4,3 +4,4 @@ __pycache__/
 Anki Manager.app/
 build/
 .playwright-cli/
+.DS_Store

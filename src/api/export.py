@@ -82,13 +82,13 @@ def main() -> int:
         created: list[str] = []
 
         for note in notes:
+            # Capture only the Back field content — stop at the next `## Field`
+            # header so other fields (e.g. Image) are not fed to html_to_md.
             note = re.sub(
-                r"(## Back\n)(.*?)(\Z|(?=^# Note))",
-                lambda m: m.group(1)
-                + html_to_md(m.group(2))
-                + ("\n" if m.group(3) else ""),
+                r"(## Back\n)(.*?)(?=\n## |\Z)",
+                lambda m: m.group(1) + html_to_md(m.group(2)),
                 note,
-                flags=re.DOTALL | re.MULTILINE,
+                flags=re.DOTALL,
             )
 
             nid_match = re.search(r"^# Note \(nid:\s*([^)]+)\)", note, re.MULTILINE)
