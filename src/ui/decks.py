@@ -404,11 +404,6 @@ class _DecksMixin:
 
 
     def _preview_markdown_file(self, path: Path) -> None:
-        import time
-
-        t0 = time.monotonic()
-        file_size = path.stat().st_size if path.exists() else 0
-
         old_path = self.selected_preview_path
         self.selected_preview_path = path
         self.preview_load_request += 1
@@ -424,57 +419,78 @@ class _DecksMixin:
         self.page.update()  # single roundtrip for all main-thread changes
 
         def worker() -> None:
-            t1 = time.monotonic()
-
-            # Check cache first
-            cached = self._md_cache.get(path)
-            if cached is not None:
-                markdown = cached
-                source = "(cache)"
-            else:
-                try:
-                    markdown = path.read_text(encoding="utf-8")
-                    self._md_cache[path] = markdown
-                    source = "(disk)"
-                except (OSError, UnicodeDecodeError) as exc:
-                    if request == self.preview_load_request:
-                        self._report_copilot_issue(f"Could not preview Markdown file {path}: {exc}")
-                    return
-
-            t_read = time.monotonic() - t1
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError) as exc:
+                if request == self.preview_load_request:
+                    self._report_copilot_issue(f"Could not preview Markdown file {path}: {exc}")
+                return
 
             if request != self.preview_load_request:
                 return
 
-            # Convert raw base64 in ## Image section to markdown image for preview
-            markdown = re.sub(
-                r"(## Image.*?\n)([A-Za-z0-9+/=]{100,})",
-                r"\1![image](data:image/png;base64,\2)",
-                markdown,
-            )
+            # Parse sections: header (title + metadata), ## Front, ## Back, ## Image
+            title_match = re.match(r"^# (.+)", text)
+            title = title_match.group(1) if title_match else path.stem
 
-            # Batch all updates — single page.update() at the end
-            t2 = time.monotonic()
+            # Extract metadata lines between title and first ## section
+            meta_lines: list[str] = []
+            front_content = ""
+            back_content = ""
+            image_content = ""
 
-            self.markdown_preview.value = markdown
+            # Split by ## headers
+            sections = re.split(r"^## ", text, flags=re.MULTILINE)
+            for i, section in enumerate(sections):
+                section = section.strip()
+                if i == 0:
+                    # First "section" is the header block (title + metadata)
+                    lines = section.splitlines()
+                    for line in lines[1:]:  # skip the # title line
+                        line = line.strip()
+                        if line and not line.startswith("##"):
+                            meta_lines.append(line)
+                elif section.startswith("Front"):
+                    front_content = section[len("Front"):].strip()
+                elif section.startswith("Back"):
+                    back_content = section[len("Back"):].strip()
+                elif section.startswith("Image"):
+                    image_content = section[len("Image"):].strip()
 
-            self.copilot_log_lines.append(f"Previewing Markdown file: {path}")
-            self.copilot_log_field.value = "\n".join(self.copilot_log_lines)
+            header_parts = [title]
+            for line in meta_lines:
+                if line.startswith("model:") or line.startswith("deck:"):
+                    header_parts.append(line)
+            header_text = "  ·  ".join(header_parts)
 
-            source_label = "cache" if cached is not None else "disk"
+            # Resolve image path for preview
+            image_src = ""
+            img_match = re.search(r"!\[.*?\]\((images/[^)]+)\)", image_content)
+            if img_match:
+                output_dir = Path(self.output_field.value.strip()).resolve()
+                try:
+                    rel_dir = path.resolve().parent.relative_to(output_dir)
+                    image_src = f"http://localhost:8551/{rel_dir}/{img_match.group(1)}"
+                except ValueError:
+                    pass
+
+            # Batch all worker updates
+            self.editable_header.value = header_text
+            self.editable_front.value = front_content
+            self.editable_back.value = back_content
+            self.editable_image.value = image_content
+            if image_src:
+                self.editable_image_preview.src = image_src
+                self.editable_image_preview.visible = True
+            else:
+                self.editable_image_preview.visible = False
+            self.editable_save_button.visible = True
+
+            source_label = "disk"
             self.copilot_status_text.value = f"Previewing {path.name} ({source_label})."
             self.copilot_status_text.color = ft.Colors.GREEN_700
 
-            timing = (
-                f"⏱ {path.name} ({file_size:,}B, {source_label}): "
-                f"read={t_read*1000:.1f}ms, "
-                f"update={(time.monotonic() - t2)*1000:.1f}ms"
-            )
-            self.copilot_log_lines.append(timing)
-            self.copilot_log_field.value = "\n".join(self.copilot_log_lines)
-
-            self._append_log(timing)
-            # Note: _append_log calls page.update() so no separate call needed
+            self.page.update()
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -482,6 +498,77 @@ class _DecksMixin:
     def refresh_preview_files(self, _event: ft.ControlEvent | None = None) -> None:
         self._refresh_preview_files()
 
+    def update_current_note(self, _event: ft.ControlEvent | None = None) -> None:
+        """Update the currently previewed markdown file back to Anki."""
+        path = self.selected_preview_path
+        if path is None:
+            self._report_issue("No markdown file selected for preview.")
+            return
+        if not self._ensure_scripts():
+            return
+        cmd = [sys.executable, str(self.update_script), str(path)]
+
+        def _update_status(msg: str, color: str = ft.Colors.ON_SURFACE_VARIANT) -> None:
+            self.copilot_status_text.value = msg
+            self.copilot_status_text.color = color
+            self.page.update()
+
+        def _update_log(_msg: str) -> None:
+            pass  # log is hidden; status bar is one line
+
+        def _update_busy(busy: bool) -> None:
+            self.copilot_progress_ring.visible = busy
+            self.page.update()
+
+        self._run_in_thread(
+            f"Update {path.name}", cmd,
+            set_status=_update_status,
+            append_log=_update_log,
+            set_busy=_update_busy,
+        )
+
+    def _save_editable_preview(self, _event: ft.ControlEvent | None = None) -> None:
+        """Save the editable preview fields back to the .md file."""
+        path = self.selected_preview_path
+        if path is None:
+            self._report_issue("No file selected for preview.")
+            return
+
+        # Reconstruct markdown from the original file header + edited fields
+        try:
+            original = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            self._report_copilot_issue(f"Cannot read file: {exc}")
+            return
+
+        # Extract the original header (everything before ## Front)
+        header_end = original.find("\n## Front")
+        if header_end == -1:
+            header_end = original.find("\n## Front")
+        if header_end == -1:
+            self._report_copilot_issue("Cannot find ## Front section in file.")
+            return
+        header = original[:header_end]
+
+        front = self.editable_front.value.strip()
+        back = self.editable_back.value.strip()
+        image = self.editable_image.value.strip()
+
+        new_md = f"{header}\n## Front\n{front}\n\n## Back\n{back}\n"
+        if image:
+            new_md += f"## Image\n{image}\n"
+        else:
+            new_md += "## Image\n"
+
+        try:
+            path.write_text(new_md, encoding="utf-8")
+        except OSError as exc:
+            self._report_copilot_issue(f"Cannot write file: {exc}")
+            return
+
+        self.copilot_status_text.value = f"Saved {path.name}."
+        self.copilot_status_text.color = ft.Colors.GREEN_700
+        self.page.update()
 
     def _generate_image_from_front(self, _event: ft.ControlEvent | None = None) -> None:
         """Open image gen dialog pre-filled with the Front section of the current note."""
@@ -522,13 +609,13 @@ class _DecksMixin:
 
 
     def _save_image_to_note(self, status_text: ft.Text | None = None) -> None:
-        """Save the generated image to the current note's ## Image field."""
-        b64 = getattr(self, '_gen_image_b64', None)
+        """Download the generated image, save to images/ folder, and attach to the note's ## Image field."""
+        url = getattr(self, '_gen_image_url', None)
         path = getattr(self, '_gen_image_path', None)
 
-        if not b64 or not path:
+        if not url or not path:
             if status_text:
-                status_text.value = "No generated image to save."
+                status_text.value = "No generated image to attach."
                 status_text.color = ft.Colors.RED_700
                 self.page.update()
             return
@@ -542,9 +629,40 @@ class _DecksMixin:
                 self.page.update()
             return
 
-        # Remove existing ## Image section, then append new one
+        # Determine images/ folder: same directory as the .md file
+        images_dir = path.parent / "images"
+        images_dir.mkdir(parents=True, exist_ok=True)
+
+        # Generate a filename from the front content (sanitized)
+        front_content = self.editable_front.value.strip() if self.editable_front.value else ""
+        safe_name = re.sub(r"[^\w\-]", "_", front_content)[:40] if front_content else "image"
+        ext = ".jpg"
+        image_filename = f"gen-{safe_name}{ext}"
+
+        # Download the image
+        import requests
+
+        if status_text:
+            status_text.value = "Downloading image..."
+            status_text.color = ft.Colors.BLUE_700
+            self.page.update()
+
+        try:
+            r = requests.get(url, timeout=120)
+            r.raise_for_status()
+            image_path = images_dir / image_filename
+            image_path.write_bytes(r.content)
+        except Exception as exc:
+            if status_text:
+                status_text.value = f"Download failed: {exc}"
+                status_text.color = ft.Colors.RED_700
+                self.page.update()
+            return
+
+        # Remove existing ## Image section, then append new one with markdown reference
         content = re.sub(r"\n*## Image\n.*?(?=\n#|\Z)", "", content, flags=re.DOTALL)
-        content = content.rstrip() + f"\n\n## Image\n{b64}\n"
+        md_ref = f"![image](images/{image_filename})"
+        content = content.rstrip() + f"\n\n## Image\n{md_ref}\n"
 
         try:
             path.write_text(content, encoding="utf-8")
@@ -555,19 +673,28 @@ class _DecksMixin:
                 self.page.update()
             return
 
-        # Update cache and preview
+        # Update cache and editable preview fields
         self._md_cache[path] = content
-        self.markdown_preview.value = content
-        self._append_log(f"Saved image to note: {path.name}")
+        self.editable_image.value = md_ref
+        # Show image preview via localhost server
+        output_dir = Path(self.output_field.value.strip()).resolve()
+        try:
+            rel_dir = path.resolve().parent.relative_to(output_dir)
+            self.editable_image_preview.src = f"http://localhost:8551/{rel_dir}/images/{image_filename}"
+            self.editable_image_preview.visible = True
+        except ValueError:
+            pass
+
+        self._append_log(f"Attached image to note: {path.name}")
 
         # Sync back to Anki
         _path = path
         _st = status_text
 
-        def _on_anki_sync(msg: str) -> None:
+        def _on_anki_sync() -> None:
             self._append_log(f"Synced image to Anki: {_path.name}")
             if _st:
-                _st.value = f"Saved to {_path.name} ✓ (synced to Anki)"
+                _st.value = f"Attached to {_path.name} ✓ (synced to Anki)"
                 _st.color = ft.Colors.GREEN_700
                 self.page.update()
 
@@ -575,12 +702,12 @@ class _DecksMixin:
         self._run_in_thread("Save to Anki", cmd, on_success=_on_anki_sync)
 
         if status_text:
-            status_text.value = f"Saved to {path.name} ✓"
+            status_text.value = f"Attached image to {path.name} ✓"
             status_text.color = ft.Colors.GREEN_700
             self.page.update()
 
         # Clear saved image ref
-        self._gen_image_b64 = None
+        self._gen_image_url = None
         self._gen_image_path = None
 
 

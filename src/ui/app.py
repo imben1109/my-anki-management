@@ -78,6 +78,48 @@ class AnkiManagerUI(_HelpersMixin, _CopilotMixin, _ImageGenMixin, _DecksMixin):
             selectable=True,
             expand=True,
             extension_set=ft.MarkdownExtensionSet.GITHUB_WEB,
+            visible=False,
+        )
+        # Editable preview: header (read-only) + Front/Back/Image fields
+        self.editable_header = ft.Text("", size=12, color=ft.Colors.ON_SURFACE_VARIANT)
+        self.editable_front = ft.TextField(
+            label="Front",
+            multiline=True,
+            min_lines=2,
+            max_lines=8,
+            expand=True,
+            text_style=ft.TextStyle(size=14),
+            border=ft.InputBorder.OUTLINE,
+        )
+        self.editable_back = ft.TextField(
+            label="Back",
+            multiline=True,
+            min_lines=2,
+            max_lines=12,
+            expand=True,
+            text_style=ft.TextStyle(size=14),
+            border=ft.InputBorder.OUTLINE,
+        )
+        self.editable_image = ft.TextField(
+            label="Image",
+            hint_text="![image](images/filename.jpg)",
+            multiline=True,
+            min_lines=1,
+            max_lines=3,
+            text_style=ft.TextStyle(size=13),
+            border=ft.InputBorder.OUTLINE,
+        )
+        self.editable_image_preview = ft.Image(
+            src="",
+            width=200,
+            fit=ft.ImageFit.CONTAIN,
+            visible=False,
+        )
+        self.editable_save_button = ft.ElevatedButton(
+            "Save changes",
+            icon=ft.Icons.SAVE,
+            on_click=self._save_editable_preview,
+            visible=False,
         )
         self.copilot_prompt_field = ft.TextField(
             label="Ask GitHub Copilot",
@@ -102,7 +144,7 @@ class AnkiManagerUI(_HelpersMixin, _CopilotMixin, _ImageGenMixin, _DecksMixin):
             text_size=13,
         )
         self.copilot_status_text = ft.Text(
-            "Ready.", color=ft.Colors.ON_SURFACE_VARIANT
+            "Ready.", color=ft.Colors.ON_SURFACE_VARIANT, size=12,
         )
         self.copilot_progress_ring = ft.ProgressRing(
             width=16, height=16, visible=False
@@ -249,6 +291,11 @@ class AnkiManagerUI(_HelpersMixin, _CopilotMixin, _ImageGenMixin, _DecksMixin):
                                 on_click=self._generate_image_from_front,
                             ),
                             ft.OutlinedButton(
+                                "Update note",
+                                icon=ft.Icons.UPLOAD,
+                                on_click=self.update_current_note,
+                            ),
+                            ft.OutlinedButton(
                                 "Refresh list",
                                 icon=ft.Icons.REFRESH,
                                 on_click=self.refresh_preview_files,
@@ -283,8 +330,16 @@ class AnkiManagerUI(_HelpersMixin, _CopilotMixin, _ImageGenMixin, _DecksMixin):
                                         self.preview_path_text,
                                         ft.Container(
                                             content=ft.Column(
-                                                controls=[self.markdown_preview],
+                                                controls=[
+                                                    self.editable_header,
+                                                    self.editable_front,
+                                                    self.editable_back,
+                                                    self.editable_image,
+                                                    self.editable_image_preview,
+                                                    self.editable_save_button,
+                                                ],
                                                 scroll=ft.ScrollMode.AUTO,
+                                                spacing=8,
                                                 expand=True,
                                             ),
                                             padding=ft.padding.only(right=12),
@@ -302,6 +357,17 @@ class AnkiManagerUI(_HelpersMixin, _CopilotMixin, _ImageGenMixin, _DecksMixin):
                         ],
                         spacing=12,
                         expand=True,
+                    ),
+                    # Compact status bar at the bottom
+                    ft.Container(
+                        content=ft.Row(
+                            controls=[
+                                self.copilot_progress_ring,
+                                self.copilot_status_text,
+                            ],
+                            spacing=8,
+                        ),
+                        padding=ft.padding.only(top=8),
                     ),
                 ],
                 spacing=12,

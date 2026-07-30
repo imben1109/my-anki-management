@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -37,6 +38,44 @@ def html_to_md(text: str) -> str:
     text = re.sub(r"<br\s*/?>", "\n", text)
     text = re.sub(r"<[^>]+>", "", text)
     return text.strip()
+
+
+def find_media_dir() -> Path | None:
+    """Locate Anki's collection.media directory from apy info output."""
+    try:
+        result = subprocess.run(
+            ["apy", "info"], capture_output=True, text=True, check=False
+        )
+        # apy wraps long paths across multiple lines — join the full output
+        # and extract with a regex that spans newlines.
+        text = result.stdout
+        m = re.search(r"Collection path:\s*(.+?\.anki2)", text, re.DOTALL)
+        if m:
+            collection_path = re.sub(r"\s+", " ", m.group(1)).strip()
+            media_dir = Path(collection_path).parent / "collection.media"
+            if media_dir.is_dir():
+                return media_dir
+    except Exception:
+        pass
+    return None
+
+
+def copy_images(note: str, media_dir: Path, images_dir: Path) -> str:
+    """Copy referenced images from Anki's media dir into images_dir and replace
+    <img src="filename"> tags with relative markdown image references."""
+    images_dir.mkdir(parents=True, exist_ok=True)
+
+    def _replace(match: re.Match) -> str:
+        src = match.group(1)
+        img_path = media_dir / src
+        if not img_path.exists():
+            return match.group(0)
+        dest = images_dir / src
+        if not dest.exists():
+            shutil.copy2(img_path, dest)
+        return f"![image](images/{src})"
+
+    return re.sub(r'<img\s+src="([^"]+)"[^>]*>', _replace, note)
 
 
 def sanitize_name(value: str) -> str:
@@ -81,6 +120,8 @@ def main() -> int:
 
         created: list[str] = []
 
+        media_dir = find_media_dir()
+
         for note in notes:
             # Capture only the Back field content — stop at the next `## Field`
             # header so other fields (e.g. Image) are not fed to html_to_md.
@@ -102,6 +143,11 @@ def main() -> int:
             safe_deck = sanitize_name(deck) or "Default"
             deck_dir = os.path.join(output_dir, safe_deck)
             os.makedirs(deck_dir, exist_ok=True)
+
+            # Copy referenced images into deck/images/ and replace src with
+            # relative markdown paths (same model as Anki's collection.media).
+            if media_dir:
+                note = copy_images(note, media_dir, Path(deck_dir) / "images")
 
             front_match = re.search(r"## Front\n(.+?)(?=\n## |\Z)", note, re.DOTALL)
             front = front_match.group(1).strip() if front_match else "untitled"

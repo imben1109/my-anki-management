@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 import urllib.parse
+from pathlib import Path
 
 import flet as ft
 
@@ -13,8 +14,8 @@ class _ImageGenMixin:
 
     def _open_image_gen_dialog(self, _event: ft.ControlEvent | None = None, initial_prompt: str = "") -> None:
         """Open an AI image generation dialog using Pollinations.ai (free, no key needed)."""
-        # Track generated image for save-to-note
-        self._gen_image_b64: str | None = None
+        # Track generated image for attach-to-card
+        self._gen_image_url: str | None = None
         self._gen_image_path: Path | None = None
 
         prompt_field = ft.TextField(
@@ -25,7 +26,7 @@ class _ImageGenMixin:
             min_lines=2,
             max_lines=4,
             expand=True,
-            on_submit=lambda e: self._generate_image(prompt_field, image_display, status_text, ring, save_btn),
+            on_submit=lambda e: self._generate_image(prompt_field, image_display, status_text, ring, button_row),
         )
         image_display = ft.Image(
             src="",
@@ -50,10 +51,17 @@ class _ImageGenMixin:
             height=360,
         )
         save_btn = ft.TextButton(
-            "Save to note",
-            icon=ft.Icons.SAVE,
+            "Attach to card",
+            icon=ft.Icons.ATTACH_FILE,
             visible=False,
             on_click=lambda e: self._save_image_to_note(status_text),
+        )
+        button_row = ft.Row(
+            controls=[
+                save_btn,
+                ft.TextButton("Close", on_click=lambda e: self.page.close(dialog)),
+            ],
+            spacing=10,
         )
 
         dialog = ft.AlertDialog(
@@ -67,7 +75,7 @@ class _ImageGenMixin:
                                 "Generate",
                                 icon=ft.Icons.AUTO_AWESOME,
                                 on_click=lambda e: self._generate_image(
-                                    prompt_field, image_display, status_text, ring, save_btn
+                                    prompt_field, image_display, status_text, ring, button_row
                                 ),
                             ),
                             ring,
@@ -76,14 +84,11 @@ class _ImageGenMixin:
                         spacing=10,
                     ),
                     image_stack,
+                    button_row,
                 ],
                 spacing=12,
                 width=520,
             ),
-            actions=[
-                save_btn,
-                ft.TextButton("Close", on_click=lambda e: self.page.close(dialog)),
-            ],
         )
         self.page.open(dialog)
 
@@ -93,7 +98,7 @@ class _ImageGenMixin:
         image_display: ft.Image,
         status_text: ft.Text,
         ring: ft.ProgressRing,
-        save_btn: ft.TextButton | None = None,
+        button_row: ft.Row,
     ) -> None:
         """Call Pollinations.ai to generate an image from the prompt."""
         prompt = prompt_field.value.strip()
@@ -111,6 +116,9 @@ class _ImageGenMixin:
         ring.visible = True
         self.page.update()
 
+        # Grab save_btn from the row (first control)
+        save_btn = button_row.controls[0] if button_row.controls else None
+
         def _worker() -> None:
             import requests
 
@@ -122,8 +130,8 @@ class _ImageGenMixin:
                     b64 = base64.b64encode(r.content).decode()
                     image_display.src_base64 = b64
                     image_display.visible = True
-                    # Store for potential save-to-note
-                    self._gen_image_b64 = b64
+                    # Store URL for attach-to-card (not base64)
+                    self._gen_image_url = image_url
                     self._gen_image_path = getattr(self, 'selected_preview_path', None)
                     if save_btn:
                         save_btn.visible = True

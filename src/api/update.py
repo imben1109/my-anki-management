@@ -13,10 +13,14 @@ from __future__ import annotations
 
 import argparse
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+# Anki stores media files here, referenced by basename only
+ANKI_MEDIA_DIR = Path.home() / "Library" / "Application Support" / "Anki2" / "User 1" / "collection.media"
 
 
 def capture_value(pattern: str, text: str) -> str:
@@ -30,7 +34,7 @@ def capture_section(name: str, text: str) -> str:
     return match.group(1).strip() if match else ""
 
 
-def normalize_note_content(content: str) -> str:
+def normalize_note_content(content: str, source_dir: Path | None = None) -> str:
     content = content.strip()
 
     nid = capture_value(r"^# Note \(nid: ([^)]+)\)", content) or capture_value(
@@ -42,6 +46,17 @@ def normalize_note_content(content: str) -> str:
     front = capture_section("Front", content)
     back = capture_section("Back", content)
     image = capture_section("Image", content)
+
+    # Resolve and copy image to Anki media dir, rewrite reference to basename
+    if image and source_dir:
+        img_match = re.search(r'!\[.*?\]\(([^)]+)\)', image)
+        if img_match:
+            img_ref = img_match.group(1)
+            img_path = (source_dir / img_ref).resolve()
+            if img_path.is_file():
+                dest = ANKI_MEDIA_DIR / img_path.name
+                shutil.copy2(img_path, dest)
+                image = f"![image]({img_path.name})"
 
     normalized: list[str] = []
     if model:
@@ -78,7 +93,7 @@ def update_note_file(md_file: Path) -> tuple[bool, str]:
 
     action = "UPDATE" if has_note_id(content) else "CREATE"
 
-    normalized = normalize_note_content(content)
+    normalized = normalize_note_content(content, source_dir=md_file.parent)
 
     with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False, encoding="utf-8") as tmp:
         tmp.write(normalized)
