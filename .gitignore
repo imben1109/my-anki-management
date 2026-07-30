@@ -3,3 +3,4 @@ __pycache__/
 .venv/
 Anki Manager.app/
 build/
+.playwright-cli/

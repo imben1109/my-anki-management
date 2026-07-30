@@ -147,6 +147,21 @@ The Copilot panel requires the `copilot` command to be installed and
 authenticated. It runs from this repository with all Copilot permissions
 enabled so prompt mode can complete non-interactively.
 
+### Automated UI Testing
+
+If `playwright-cli` is installed (via `npm install -g @playwright/cli`), Copilot
+can use it to verify UI flows end-to-end in a real browser. The tool opens the
+Flet web app, enables accessibility mode so controls are exposed as DOM
+elements, and clicks through the full workflow — selecting a deck, triggering
+export, confirming the delete dialog, and verifying the results.
+
+```sh
+npm install -g @playwright/cli
+```
+
+When `playwright-cli` is detected, Copilot may use it to confirm that UI
+changes work before reporting completion.
+
 ## Usage
 
 List decks:

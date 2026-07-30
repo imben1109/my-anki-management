@@ -188,8 +188,8 @@ class _DecksMixin:
     def _show_export_confirm_dialog(
         self, query: str, output_dir: str, output_path: Path, deck_folder: Path
     ) -> None:
-        print(f"DEBUG: _show_export_confirm_dialog for {deck_folder}", flush=True)
         dialog = ft.AlertDialog(
+            modal=True,
             title=ft.Text("Deck folder already exists"),
             content=ft.Text(
                 f'The folder "{deck_folder.name}" already exists in the export directory. '
@@ -205,10 +205,7 @@ class _DecksMixin:
                 ),
             ],
         )
-        print("DEBUG: opening dialog", flush=True)
         self.page.open(dialog)
-        print("DEBUG: dialog opened", flush=True)
-
 
     def _confirm_export_delete(
         self,
@@ -219,19 +216,14 @@ class _DecksMixin:
         output_path: Path,
         deck_folder: Path,
     ) -> None:
-        print("DEBUG: _confirm_export_delete called", flush=True)
         self.page.close(dialog)
-        print(f"DEBUG: dialog closed, deleting {deck_folder}", flush=True)
         shutil.rmtree(deck_folder)
         self._append_log(f"Deleted: {deck_folder}")
-        print("DEBUG: calling _do_export", flush=True)
         self._do_export(query, output_dir, output_path)
 
 
     def _do_export(self, query: str, output_dir: str, output_path: Path) -> None:
-        print(f"DEBUG: _do_export query={query}, dir={output_dir}", flush=True)
         cmd = [sys.executable, str(self.export_script), query, output_dir]
-        print(f"DEBUG: cmd={cmd}", flush=True)
 
         def on_success() -> None:
             if not self.update_target_field.value.strip():
