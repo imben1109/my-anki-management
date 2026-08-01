@@ -1,6 +1,7 @@
 anki-export/
 __pycache__/
 .venv/
+.env
 Anki Manager.app/
 build/
 .playwright-cli/

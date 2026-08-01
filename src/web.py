@@ -3,13 +3,29 @@
 from __future__ import annotations
 
 import http.server
+import os
 import socketserver
 import sys
 import threading
 from pathlib import Path
 
 # Ensure project root is on the Python path
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+_project_root = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_project_root))
+
+# Load .env file if present
+_env_file = _project_root / ".env"
+if _env_file.is_file():
+    with _env_file.open("r") as _f:
+        for _line in _f:
+            _line = _line.strip()
+            if _line and not _line.startswith("#") and "=" in _line:
+                if _line.startswith("export "):
+                    _line = _line[7:]
+                _key, _, _val = _line.partition("=")
+                _val = _val.strip().strip('"').strip("'")
+                if _key and _key not in os.environ:
+                    os.environ[_key] = _val
 
 import flet as ft
 

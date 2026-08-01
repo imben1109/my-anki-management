@@ -9,12 +9,12 @@ from pathlib import Path
 import flet as ft
 
 from src.ui.helpers import _HelpersMixin, parse_decks
-from src.ui.copilot import _CopilotMixin
+from src.ui.agent_chat import _AgentChatMixin
 from src.ui.image_gen import _ImageGenMixin
 from src.ui.decks import _DecksMixin
 
 
-class AnkiManagerUI(_HelpersMixin, _CopilotMixin, _ImageGenMixin, _DecksMixin):
+class AnkiManagerUI(_HelpersMixin, _AgentChatMixin, _ImageGenMixin, _DecksMixin):
     def __init__(self, page: ft.Page) -> None:
         self.page = page
         self.page.title = "Anki Manager UI"
@@ -122,7 +122,7 @@ class AnkiManagerUI(_HelpersMixin, _CopilotMixin, _ImageGenMixin, _DecksMixin):
             visible=False,
         )
         self.copilot_prompt_field = ft.TextField(
-            label="Ask GitHub Copilot",
+            label="Ask AI Assistant",
             hint_text="Ask about this Anki collection or request a change in this project.",
             multiline=True,
             min_lines=3,
@@ -286,6 +286,16 @@ class AnkiManagerUI(_HelpersMixin, _CopilotMixin, _ImageGenMixin, _DecksMixin):
                                 weight=ft.FontWeight.BOLD,
                             ),
                             ft.OutlinedButton(
+                                "Batch image gen",
+                                icon=ft.Icons.AUTO_AWESOME,
+                                on_click=self._batch_generate_images,
+                            ),
+                            ft.OutlinedButton(
+                                "Gen image description",
+                                icon=ft.Icons.AUTO_AWESOME,
+                                on_click=self._generate_image_description,
+                            ),
+                            ft.OutlinedButton(
                                 "Generate image",
                                 icon=ft.Icons.IMAGE,
                                 on_click=self._generate_image_from_front,
@@ -436,9 +446,9 @@ class AnkiManagerUI(_HelpersMixin, _CopilotMixin, _ImageGenMixin, _DecksMixin):
                         on_click=self.show_preview_workspace,
                     ),
                     ft.PopupMenuItem(
-                        text="GitHub Copilot",
+                        text="AI Chat",
                         icon=ft.Icons.SMART_TOY,
-                        on_click=self._open_copilot_dialog,
+                        on_click=self._open_agent_chat_dialog,
                     ),
                     ft.PopupMenuItem(
                         text="Generate image",

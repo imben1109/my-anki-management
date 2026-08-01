@@ -12,6 +12,7 @@ import threading
 from pathlib import Path
 
 import flet as ft
+import requests
 
 from src.ui.helpers import parse_decks
 
@@ -24,6 +25,13 @@ on run argv
     return POSIX path of pickedFolder
 end run
 """
+
+
+def _extract_section(name: str, text: str) -> str:
+    """Extract the content of a ## section from markdown text."""
+    pattern = rf"^## {re.escape(name)}(?:\s+\(markdown\))?\n(.*?)(?=^## |\Z)"
+    match = re.search(pattern, text, flags=re.MULTILINE | re.DOTALL)
+    return match.group(1).strip() if match else ""
 
 
 class _DecksMixin:
@@ -570,6 +578,205 @@ class _DecksMixin:
         self.copilot_status_text.color = ft.Colors.GREEN_700
         self.page.update()
 
+    def _batch_generate_images(self, _event: ft.ControlEvent | None = None) -> None:
+        """Batch process all preview cards: AI description → OpenRouter seedream image → attach → update to Anki."""
+        if not self.preview_files:
+            self._report_copilot_issue("No exported markdown files found. Export a deck first.")
+            return
+
+        # Pre-scan: count cards without images
+        to_process: list[Path] = []
+        for path in self.preview_files:
+            try:
+                content = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            front = _extract_section("Front", content)
+            image = _extract_section("Image", content)
+            if front and not image:
+                to_process.append(path)
+
+        if not to_process:
+            self._report_copilot_issue("All cards already have images. Nothing to do.")
+            return
+
+        api_key = os.environ.get("OPENROUTER_API_KEY", "")
+        ai_key = os.environ.get("AI_CHAT_API_KEY", "")
+        if not api_key:
+            self._report_copilot_issue("Set OPENROUTER_API_KEY environment variable.")
+            return
+        if not ai_key:
+            self._report_copilot_issue("Set AI_CHAT_API_KEY environment variable.")
+            return
+
+        total = len(to_process)
+        self.copilot_status_text.value = f"Batch: 0/{total} cards..."
+        self.copilot_status_text.color = ft.Colors.BLUE_700
+        self.copilot_progress_ring.visible = True
+        self.page.update()
+
+        def _worker() -> None:
+            import asyncio
+            import base64
+            import re as _re
+
+            success = 0
+            failed = 0
+
+            for i, path in enumerate(to_process):
+                name = path.name
+                try:
+                    content = path.read_text(encoding="utf-8")
+                    front = _extract_section("Front", content)
+                    if not front:
+                        failed += 1
+                        continue
+
+                    # Step 1: AI description
+                    desc_prompt = (
+                        "You are a language learning assistant using the comprehensible input method. "
+                        "Given a vocabulary word or phrase, create a single-sentence, vivid image description "
+                        "that clearly illustrates its meaning in a natural scene. "
+                        "Focus on the core meaning — avoid abstract metaphors. "
+                        "Keep it under 80 words. Do NOT include any explanation, just the description.\n\n"
+                        f"Vocabulary: {front}"
+                    )
+                    try:
+                        description = asyncio.run(self._run_agent(desc_prompt)).strip()
+                    except Exception as exc:
+                        self._log_batch_progress(i, total, name, f"AI error: {exc}", False)
+                        failed += 1
+                        continue
+
+                    # Step 2: Generate image via OpenRouter seedream
+                    try:
+                        r = requests.post(
+                            "https://openrouter.ai/api/v1/images",
+                            headers={
+                                "Authorization": f"Bearer {api_key}",
+                                "Content-Type": "application/json",
+                            },
+                            json={
+                                "model": "bytedance-seed/seedream-4.5",
+                                "prompt": description,
+                                "response_format": "b64_json",
+                            },
+                            timeout=180,
+                        )
+                        if r.status_code != 200:
+                            self._log_batch_progress(i, total, name, f"Image HTTP {r.status_code}", False)
+                            failed += 1
+                            continue
+
+                        data = r.json()
+                        img_data = data.get("data", [])
+                        if isinstance(img_data, list) and len(img_data) > 0:
+                            img_b64 = img_data[0].get("b64_json", "")
+                        elif isinstance(img_data, str):
+                            img_b64 = img_data
+                        else:
+                            self._log_batch_progress(i, total, name, "No image in response", False)
+                            failed += 1
+                            continue
+
+                        img_bytes = base64.b64decode(img_b64)
+                    except Exception as exc:
+                        self._log_batch_progress(i, total, name, f"Image error: {exc}", False)
+                        failed += 1
+                        continue
+
+                    # Step 3: Save image
+                    images_dir = path.parent / "images"
+                    images_dir.mkdir(parents=True, exist_ok=True)
+                    safe_name = _re.sub(r"[^\w\-]", "_", front)[:40]
+                    img_filename = f"batch-{safe_name}.png"
+                    img_path = images_dir / img_filename
+                    img_path.write_bytes(img_bytes)
+
+                    # Step 4: Update markdown
+                    content = _re.sub(r"\n*## Image\n.*?(?=\n#|\Z)", "", content, flags=_re.DOTALL)
+                    md_ref = f"![image](images/{img_filename})"
+                    content = content.rstrip() + f"\n\n## Image\n{md_ref}\n"
+                    path.write_text(content, encoding="utf-8")
+
+                    success += 1
+                    self._log_batch_progress(i, total, name, "✓", True)
+
+                except Exception as exc:
+                    failed += 1
+                    self._log_batch_progress(i, total, name, f"Error: {exc}", False)
+
+            # Step 5: Update all to Anki
+            final_msg = f"Batch done: {success} updated, {failed} failed."
+            if success > 0:
+                final_msg += " Updating Anki..."
+                self.copilot_status_text.value = final_msg
+                self.copilot_status_text.color = ft.Colors.BLUE_700
+                self.page.update()
+
+                output_path = Path(self.output_field.value.strip())
+                if self._ensure_scripts():
+                    cmd = [sys.executable, str(self.update_script), str(output_path)]
+                    import subprocess
+                    subprocess.run(cmd, capture_output=True, timeout=300)
+                    final_msg = f"Batch done: {success} cards updated to Anki, {failed} failed."
+
+            self.copilot_status_text.value = final_msg
+            self.copilot_status_text.color = ft.Colors.GREEN_700 if failed == 0 else ft.Colors.ORANGE_700
+            self.copilot_progress_ring.visible = False
+            self.page.update()
+            self._refresh_preview_files()
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _log_batch_progress(self, i: int, total: int, name: str, detail: str, ok: bool) -> None:
+        """Update status bar with batch progress."""
+        self.copilot_status_text.value = f"Batch: {i+1}/{total} — {name} {detail}"
+        self.copilot_status_text.color = ft.Colors.BLUE_700 if ok else ft.Colors.ORANGE_700
+        self.page.update()
+
+    def _generate_image_description(self, _event: ft.ControlEvent | None = None) -> None:
+        """Use AI to generate a vivid image description from the Front field,
+        then open the image gen dialog with that description."""
+        path = self.selected_preview_path
+        if path is None:
+            self._report_copilot_issue("No markdown file selected for preview.")
+            return
+
+        # Use the editable front content (already parsed and loaded)
+        front = self.editable_front.value.strip() if self.editable_front.value else ""
+        if not front:
+            self._report_copilot_issue("No Front field found in the current note.")
+            return
+
+        self.copilot_status_text.value = "Generating image description..."
+        self.copilot_status_text.color = ft.Colors.BLUE_700
+        self.page.update()
+
+        prompt = (
+            "You are a language learning assistant using the comprehensible input method. "
+            "Given a vocabulary word or phrase, create a single-sentence, vivid image description "
+            "that clearly illustrates its meaning in a natural scene. "
+            "Focus on the core meaning — avoid abstract metaphors. "
+            "Keep it under 80 words. Do NOT include any explanation, just the description.\n\n"
+            f"Vocabulary: {front}"
+        )
+
+        def _worker() -> None:
+            import asyncio
+            try:
+                description = asyncio.run(self._run_agent(prompt)).strip()
+            except Exception as exc:
+                description = f"Error: {exc}"
+
+            # Open image gen dialog with the generated description
+            self._open_image_gen_dialog(initial_prompt=description)
+            self.copilot_status_text.value = "Description ready."
+            self.copilot_status_text.color = ft.Colors.GREEN_700
+            self.page.update()
+
+        threading.Thread(target=_worker, daemon=True).start()
+
     def _generate_image_from_front(self, _event: ft.ControlEvent | None = None) -> None:
         """Open image gen dialog pre-filled with the Front section of the current note."""
         path = self.selected_preview_path
@@ -609,13 +816,20 @@ class _DecksMixin:
 
 
     def _save_image_to_note(self, status_text: ft.Text | None = None) -> None:
-        """Download the generated image, save to images/ folder, and attach to the note's ## Image field."""
+        """Save the generated image to images/ folder and attach to the note's ## Image field."""
         url = getattr(self, '_gen_image_url', None)
+        image_data = getattr(self, '_gen_image_data', None)
         path = getattr(self, '_gen_image_path', None)
 
-        if not url or not path:
+        if not path:
             if status_text:
                 status_text.value = "No generated image to attach."
+                status_text.color = ft.Colors.RED_700
+                self.page.update()
+            return
+        if not url and not image_data:
+            if status_text:
+                status_text.value = "No generated image data available."
                 status_text.color = ft.Colors.RED_700
                 self.page.update()
             return
@@ -643,15 +857,19 @@ class _DecksMixin:
         import requests
 
         if status_text:
-            status_text.value = "Downloading image..."
+            status_text.value = "Saving image..."
             status_text.color = ft.Colors.BLUE_700
             self.page.update()
 
         try:
-            r = requests.get(url, timeout=120)
-            r.raise_for_status()
             image_path = images_dir / image_filename
-            image_path.write_bytes(r.content)
+            if image_data:
+                image_path.write_bytes(image_data)
+            else:
+                import requests
+                r = requests.get(url, timeout=120)
+                r.raise_for_status()
+                image_path.write_bytes(r.content)
         except Exception as exc:
             if status_text:
                 status_text.value = f"Download failed: {exc}"
