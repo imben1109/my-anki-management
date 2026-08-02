@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Flet UI for Anki deck listing, export, and update workflows."""
+"""Flet UI for Anki deck listing, export, and update workflows.
+
+Architecture:
+  - src/api/       — Business logic (no Flet imports)
+  - src/ui/components/ — Reusable Flet widgets
+  - src/ui/views/  — Full-page compositions of components
+  - app.py         — App shell that wires views together
+"""
 
 from __future__ import annotations
 
@@ -8,10 +15,12 @@ from pathlib import Path
 
 import flet as ft
 
-from src.ui.helpers import _HelpersMixin, parse_decks
+from src.ui.helpers import _HelpersMixin
 from src.ui.agent_chat import _AgentChatMixin
 from src.ui.image_gen import _ImageGenMixin
 from src.ui.decks import _DecksMixin
+from src.ui.views.main_view import build_main_view
+from src.ui.views.preview_view import build_preview_view
 
 
 class AnkiManagerUI(_HelpersMixin, _AgentChatMixin, _ImageGenMixin, _DecksMixin):
@@ -25,11 +34,12 @@ class AnkiManagerUI(_HelpersMixin, _AgentChatMixin, _ImageGenMixin, _DecksMixin)
         self.page.window_min_width = 900
         self.page.window_min_height = 620
 
-        # Project root is 3 levels up from app/ui/app.py
+        # Project root is 3 levels up from src/ui/app.py
         self.base_dir = Path(__file__).resolve().parent.parent.parent
         self.export_script = self.base_dir / "src" / "api" / "export.py"
         self.update_script = self.base_dir / "src" / "api" / "update.py"
 
+        # --- Application state ---
         self.decks: list[str] = []
         self.selected_deck: str | None = None
         self.selected_preview_path: Path | None = None
@@ -45,10 +55,9 @@ class AnkiManagerUI(_HelpersMixin, _AgentChatMixin, _ImageGenMixin, _DecksMixin)
 
         default_output = str(self.base_dir / "anki-export")
 
+        # --- Shared control references used across views ---
         self.output_field = ft.TextField(
-            label="Output folder",
-            value=default_output,
-            expand=True,
+            label="Output folder", value=default_output, expand=True,
         )
         self.query_field = ft.TextField(
             label="Custom query",
@@ -73,114 +82,46 @@ class AnkiManagerUI(_HelpersMixin, _AgentChatMixin, _ImageGenMixin, _DecksMixin)
             on_change=self._on_preview_search,
             dense=True,
         )
-        self.markdown_preview = ft.Markdown(
-            value="",
-            selectable=True,
-            expand=True,
-            extension_set=ft.MarkdownExtensionSet.GITHUB_WEB,
-            visible=False,
-        )
-        # Editable preview: header (read-only) + Front/Back/Image fields
         self.editable_header = ft.Text("", size=12, color=ft.Colors.ON_SURFACE_VARIANT)
         self.editable_front = ft.TextField(
-            label="Front",
-            multiline=True,
-            min_lines=2,
-            max_lines=8,
-            expand=True,
-            text_style=ft.TextStyle(size=14),
-            border=ft.InputBorder.OUTLINE,
+            label="Front", multiline=True, min_lines=2, max_lines=8, expand=True,
+            text_style=ft.TextStyle(size=14), border=ft.InputBorder.OUTLINE,
         )
         self.editable_back = ft.TextField(
-            label="Back",
-            multiline=True,
-            min_lines=2,
-            max_lines=12,
-            expand=True,
-            text_style=ft.TextStyle(size=14),
-            border=ft.InputBorder.OUTLINE,
+            label="Back", multiline=True, min_lines=2, max_lines=12, expand=True,
+            text_style=ft.TextStyle(size=14), border=ft.InputBorder.OUTLINE,
         )
         self.editable_image = ft.TextField(
-            label="Image",
-            hint_text="![image](images/filename.jpg)",
-            multiline=True,
-            min_lines=1,
-            max_lines=3,
-            text_style=ft.TextStyle(size=13),
-            border=ft.InputBorder.OUTLINE,
+            label="Image", hint_text="![image](images/filename.jpg)",
+            multiline=True, min_lines=1, max_lines=3,
+            text_style=ft.TextStyle(size=13), border=ft.InputBorder.OUTLINE,
         )
         self.editable_image_preview = ft.Image(
-            src="",
-            width=200,
-            fit=ft.ImageFit.CONTAIN,
-            visible=False,
+            src="", width=200, fit=ft.ImageFit.CONTAIN, visible=False,
         )
         self.editable_save_button = ft.ElevatedButton(
-            "Save changes",
-            icon=ft.Icons.SAVE,
-            on_click=self._save_editable_preview,
-            visible=False,
-        )
-        self.copilot_prompt_field = ft.TextField(
-            label="Ask AI Assistant",
-            hint_text="Ask about this Anki collection or request a change in this project.",
-            multiline=True,
-            min_lines=3,
-            max_lines=6,
-            expand=True,
+            "Save changes", icon=ft.Icons.SAVE,
+            on_click=self._save_editable_preview, visible=False,
         )
 
         self.status_text = ft.Text("Ready.", color=ft.Colors.ON_SURFACE_VARIANT)
         self.progress_ring = ft.ProgressRing(width=16, height=16, visible=False)
-        self.deck_count_text = ft.Text("Decks: 0", color=ft.Colors.ON_SURFACE_VARIANT)
-        self.deck_list = ft.ListView(expand=True, spacing=8, padding=0)
         self.log_field = ft.TextField(
-            value="",
-            multiline=True,
-            min_lines=16,
-            max_lines=24,
-            read_only=True,
-            expand=True,
-            text_size=13,
+            value="", multiline=True, min_lines=16, max_lines=24,
+            read_only=True, expand=True, text_size=13,
         )
         self.copilot_status_text = ft.Text(
             "Ready.", color=ft.Colors.ON_SURFACE_VARIANT, size=12,
         )
-        self.copilot_progress_ring = ft.ProgressRing(
-            width=16, height=16, visible=False
-        )
+        self.copilot_progress_ring = ft.ProgressRing(width=16, height=16, visible=False)
         self.copilot_log_field = ft.TextField(
-            value="",
-            multiline=True,
-            min_lines=8,
-            max_lines=20,
-            read_only=True,
-            expand=True,
+            value="", multiline=True, min_lines=8, max_lines=20,
+            read_only=True, expand=True,
             text_style=ft.TextStyle(font_family="monospace", size=13),
         )
         self._copilot_dialog: ft.AlertDialog | None = None
 
-        self.refresh_button = ft.ElevatedButton("Refresh decks", on_click=self.refresh_decks)
-        self.export_deck_button = ft.ElevatedButton(
-            "Export selected deck",
-            on_click=self.export_selected_deck,
-        )
-        self.export_query_button = ft.FilledButton(
-            "Export query",
-            icon=ft.Icons.DOWNLOAD,
-            on_click=self.export_custom_query,
-        )
-        self.update_button = ft.FilledButton(
-            "Update notes",
-            icon=ft.Icons.UPLOAD_FILE,
-            on_click=self.update_notes,
-        )
-        self.copilot_button = ft.FilledButton(
-            "Send",
-            icon=ft.Icons.SEND,
-            on_click=self.ask_copilot,
-        )
-
+        # --- File pickers ---
         self.output_dir_picker = ft.FilePicker(on_result=self._handle_output_dir_picked)
         self.update_dir_picker = ft.FilePicker(on_result=self._handle_update_dir_picked)
         self.update_file_picker = ft.FilePicker(on_result=self._handle_update_file_picked)
@@ -192,267 +133,80 @@ class AnkiManagerUI(_HelpersMixin, _AgentChatMixin, _ImageGenMixin, _DecksMixin)
         self._refresh_preview_files()
         self.refresh_decks()
 
-
+    # ------------------------------------------------------------------
+    # UI construction (composed from views)
+    # ------------------------------------------------------------------
     def _build_ui(self) -> None:
-        left_panel = ft.Container(
-            content=ft.Column(
-                controls=[
-                    ft.Row(
-                        controls=[
-                            ft.Text("Decks", size=20, weight=ft.FontWeight.BOLD),
-                            self.deck_count_text,
-                        ],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                    ),
-                    ft.Row(
-                        controls=[self.refresh_button, self.export_deck_button],
-                        wrap=True,
-                    ),
-                    ft.Container(content=self.deck_list, expand=True),
-                ],
-                spacing=12,
-                expand=True,
-            ),
-            padding=16,
-            border=ft.border.all(1, ft.Colors.OUTLINE_VARIANT),
-            border_radius=14,
-            expand=1,
+        """Build the UI by composing views from src/ui/views/. Each view is a
+        pure function that takes callbacks and control references — no more
+        inline widget construction."""
+
+        self.manage_workspace = build_main_view(
+            decks=self.decks,
+            selected_deck=self.selected_deck,
+            deck_count=len(self.decks),
+            on_refresh=self.refresh_decks,
+            on_select_deck=self._select_deck,
+            on_export_selected=self.export_selected_deck,
+            output_field=self.output_field,
+            query_field=self.query_field,
+            on_choose_output_folder=self.choose_output_folder,
+            on_export_query=self.export_custom_query,
+            update_target_field=self.update_target_field,
+            on_choose_update_folder=self.choose_update_folder,
+            on_choose_update_file=self.choose_update_file,
+            on_update=self.update_notes,
+            log_field=self.log_field,
+            status_text=self.status_text,
+            progress_ring=self.progress_ring,
         )
 
-        export_card = ft.Container(
-            content=ft.Column(
-                controls=[
-                    ft.Text("Export", size=18, weight=ft.FontWeight.BOLD),
-                    ft.Row(
-                        controls=[
-                            self.output_field,
-                            ft.OutlinedButton(
-                                "Choose folder",
-                                icon=ft.Icons.FOLDER_OPEN,
-                                on_click=self.choose_output_folder,
-                            ),
-                        ],
-                        vertical_alignment=ft.CrossAxisAlignment.END,
-                    ),
-                    ft.Row(
-                        controls=[self.query_field, self.export_query_button],
-                        vertical_alignment=ft.CrossAxisAlignment.END,
-                    ),
-                ],
-                spacing=12,
-            ),
-            padding=16,
-            border=ft.border.all(1, ft.Colors.OUTLINE_VARIANT),
-            border_radius=14,
+        self.preview_workspace = build_preview_view(
+            preview_files=self.preview_files,
+            selected_preview_path=self.selected_preview_path,
+            output_dir=self.output_field.value or "",
+            preview_search_value=self.preview_search_field.value or "",
+            preview_search_field=self.preview_search_field,
+            on_select_file=self._preview_markdown_file,
+            on_search_files=self._on_preview_search,
+            on_refresh_files=self._refresh_preview_files,
+            preview_path_text=self.preview_path_text,
+            editable_header=self.editable_header,
+            editable_front=self.editable_front,
+            editable_back=self.editable_back,
+            editable_image=self.editable_image,
+            editable_image_preview=self.editable_image_preview,
+            editable_save_button=self.editable_save_button,
+            on_save_editable=self._save_editable_preview,
+            on_batch_gen=self._batch_generate_images,
+            on_gen_description=self._generate_image_description,
+            on_gen_image=self._generate_image_from_front,
+            on_update_current=self.update_current_note,
+            on_refresh_list=self.refresh_preview_files,
+            copilot_status_text=self.copilot_status_text,
+            copilot_progress_ring=self.copilot_progress_ring,
         )
-
-        update_card = ft.Container(
-            content=ft.Column(
-                controls=[
-                    ft.Text("Update", size=18, weight=ft.FontWeight.BOLD),
-                    ft.Row(
-                        controls=[
-                            self.update_target_field,
-                            ft.OutlinedButton(
-                                "Pick folder",
-                                icon=ft.Icons.FOLDER,
-                                on_click=self.choose_update_folder,
-                            ),
-                            ft.OutlinedButton(
-                                "Pick file",
-                                icon=ft.Icons.DESCRIPTION,
-                                on_click=self.choose_update_file,
-                            ),
-                        ],
-                        vertical_alignment=ft.CrossAxisAlignment.END,
-                    ),
-                    ft.Row(controls=[self.update_button], wrap=True),
-                ],
-                spacing=12,
-            ),
-            padding=16,
-            border=ft.border.all(1, ft.Colors.OUTLINE_VARIANT),
-            border_radius=14,
-        )
-
-        preview_workspace = ft.Container(
-            content=ft.Column(
-                controls=[
-                    ft.Row(
-                        controls=[
-                            ft.Text(
-                                "Markdown preview",
-                                size=18,
-                                weight=ft.FontWeight.BOLD,
-                            ),
-                            ft.OutlinedButton(
-                                "Batch image gen",
-                                icon=ft.Icons.AUTO_AWESOME,
-                                on_click=self._batch_generate_images,
-                            ),
-                            ft.OutlinedButton(
-                                "Gen image description",
-                                icon=ft.Icons.AUTO_AWESOME,
-                                on_click=self._generate_image_description,
-                            ),
-                            ft.OutlinedButton(
-                                "Generate image",
-                                icon=ft.Icons.IMAGE,
-                                on_click=self._generate_image_from_front,
-                            ),
-                            ft.OutlinedButton(
-                                "Update note",
-                                icon=ft.Icons.UPLOAD,
-                                on_click=self.update_current_note,
-                            ),
-                            ft.OutlinedButton(
-                                "Refresh list",
-                                icon=ft.Icons.REFRESH,
-                                on_click=self.refresh_preview_files,
-                            ),
-                        ],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                    ),
-                    ft.Row(
-                        controls=[
-                            ft.Container(
-                                content=ft.Column(
-                                    controls=[
-                                        ft.Text(
-                                            "Exported Markdown files",
-                                            weight=ft.FontWeight.BOLD,
-                                        ),
-                                        self.preview_search_field,
-                                        self.preview_file_list,
-                                    ],
-                                    spacing=8,
-                                    expand=True,
-                                ),
-                                width=300,
-                                padding=12,
-                                border=ft.border.all(1, ft.Colors.OUTLINE_VARIANT),
-                                border_radius=10,
-                                expand=False,
-                            ),
-                            ft.Container(
-                                content=ft.Column(
-                                    controls=[
-                                        self.preview_path_text,
-                                        ft.Container(
-                                            content=ft.Column(
-                                                controls=[
-                                                    self.editable_header,
-                                                    self.editable_front,
-                                                    self.editable_back,
-                                                    self.editable_image,
-                                                    self.editable_image_preview,
-                                                    self.editable_save_button,
-                                                ],
-                                                scroll=ft.ScrollMode.AUTO,
-                                                spacing=8,
-                                                expand=True,
-                                            ),
-                                            padding=ft.padding.only(right=12),
-                                            expand=True,
-                                        ),
-                                    ],
-                                    spacing=8,
-                                    expand=True,
-                                ),
-                                padding=12,
-                                border=ft.border.all(1, ft.Colors.OUTLINE_VARIANT),
-                                border_radius=10,
-                                expand=True,
-                            ),
-                        ],
-                        spacing=12,
-                        expand=True,
-                    ),
-                    # Compact status bar at the bottom
-                    ft.Container(
-                        content=ft.Row(
-                            controls=[
-                                self.copilot_progress_ring,
-                                self.copilot_status_text,
-                            ],
-                            spacing=8,
-                        ),
-                        padding=ft.padding.only(top=8),
-                    ),
-                ],
-                spacing=12,
-                expand=True,
-            ),
-            padding=16,
-            border=ft.border.all(1, ft.Colors.OUTLINE_VARIANT),
-            border_radius=14,
-            expand=True,
-        )
-
-        logs_card = ft.Container(
-            content=ft.Column(
-                controls=[
-                    ft.Row(
-                        controls=[
-                            ft.Text("Status & logs", size=18, weight=ft.FontWeight.BOLD),
-                            ft.Row(
-                                controls=[self.progress_ring, self.status_text],
-                                spacing=10,
-                            ),
-                        ],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                    ),
-                    self.log_field,
-                ],
-                spacing=12,
-                expand=True,
-            ),
-            padding=16,
-            border=ft.border.all(1, ft.Colors.OUTLINE_VARIANT),
-            border_radius=14,
-            expand=True,
-        )
-
-        right_panel = ft.Column(
-            controls=[export_card, update_card, logs_card],
-            spacing=12,
-            expand=2,
-        )
-
-        manage_workspace = ft.Row(
-            controls=[left_panel, right_panel],
-            spacing=16,
-            expand=True,
-            vertical_alignment=ft.CrossAxisAlignment.START,
-        )
-        self.manage_workspace = manage_workspace
-        self.preview_workspace = preview_workspace
-        # Start on manage decks — preview hidden until user switches via hamburger menu
         self.preview_workspace.visible = False
 
-        # Hamburger menu instead of button row
+        # --- App bar with hamburger menu ---
         app_bar = ft.AppBar(
             leading=ft.PopupMenuButton(
                 icon=ft.Icons.MENU,
                 items=[
                     ft.PopupMenuItem(
-                        text="Manage notes",
-                        icon=ft.Icons.DASHBOARD,
+                        text="Manage notes", icon=ft.Icons.DASHBOARD,
                         on_click=self.show_manage_workspace,
                     ),
                     ft.PopupMenuItem(
-                        text="Markdown preview",
-                        icon=ft.Icons.PREVIEW,
+                        text="Markdown preview", icon=ft.Icons.PREVIEW,
                         on_click=self.show_preview_workspace,
                     ),
                     ft.PopupMenuItem(
-                        text="AI Chat",
-                        icon=ft.Icons.SMART_TOY,
+                        text="AI Chat", icon=ft.Icons.SMART_TOY,
                         on_click=self._open_agent_chat_dialog,
                     ),
                     ft.PopupMenuItem(
-                        text="Generate image",
-                        icon=ft.Icons.IMAGE,
+                        text="Generate image", icon=ft.Icons.IMAGE,
                         on_click=self._open_image_gen_dialog,
                     ),
                 ],
@@ -464,10 +218,7 @@ class AnkiManagerUI(_HelpersMixin, _AgentChatMixin, _ImageGenMixin, _DecksMixin)
         self.page.appbar = app_bar
         self.page.add(
             ft.Column(
-                controls=[
-                    self.manage_workspace,
-                    self.preview_workspace,
-                ],
+                controls=[self.manage_workspace, self.preview_workspace],
                 spacing=12,
                 expand=True,
             )

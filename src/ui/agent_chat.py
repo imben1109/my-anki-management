@@ -1,28 +1,16 @@
-"""AI Agent chat — replaces Copilot CLI with OpenAI Agents SDK + DeepSeek."""
+"""AI Agent chat — dialog mixin powered by OpenAI Agents SDK + DeepSeek.
+
+API logic lives in src/api/agent.py. This mixin provides the Flet dialog UI.
+"""
 
 from __future__ import annotations
 
 import asyncio
-import os
-import threading
 import uuid
 
 import flet as ft
 
-import eval_type_backport  # noqa: F401 — needed for Python 3.9 compat
-
-# Monkey-patch: openai-agents is incompatible with newer openai SDKs that
-# require cache_write_tokens on InputTokensDetails. Provide a default.
-from openai.types.responses.response_usage import InputTokensDetails as _ITD
-
-_orig_init = _ITD.__init__
-def _patched_init(self, **kwargs):
-    kwargs.setdefault("cache_write_tokens", 0)
-    _orig_init(self, **kwargs)
-_ITD.__init__ = _patched_init
-
-from agents import Agent, Runner, RunConfig, function_tool
-from agents.models.openai_provider import OpenAIProvider
+from src.api.agent import create_agent_provider, build_agent, run_agent
 
 
 class _AgentChatMixin:
@@ -31,46 +19,22 @@ class _AgentChatMixin:
     # ------------------------------------------------------------------
     # Agent setup (lazy — created once per session)
     # ------------------------------------------------------------------
-    def _get_agent_provider(self) -> OpenAIProvider:
+    def _get_agent_provider(self):
         """Return a cached OpenAIProvider configured via AI_CHAT_* env vars."""
         if not hasattr(self, "_agent_provider"):
-            api_key = os.environ.get("AI_CHAT_API_KEY", "")
-            base_url = os.environ.get("AI_CHAT_BASE_URL", "")
-
-            # Normalize: strip /anthropic suffix for OpenAI Chat Completions format
-            if "/anthropic" in base_url:
-                base_url = base_url.replace("/anthropic", "/v1")
-
-            if not base_url:
-                base_url = "https://api.deepseek.com/v1"
-            elif "://" not in base_url:
-                base_url = f"https://{base_url}"
-
-            self._agent_provider = OpenAIProvider(
-                api_key=api_key,
-                base_url=base_url,
-                use_responses=False,  # Chat Completions API
-            )
+            self._agent_provider = create_agent_provider()
         return self._agent_provider
 
-    def _build_agent(self) -> Agent:
+    def _build_agent(self):
         """Build the Anki assistant agent with tools."""
-        model = os.environ.get("AI_CHAT_MODEL", "deepseek-chat")
-        return Agent(
-            name="Anki Assistant",
-            instructions=(
-                "You are a helpful Anki note management assistant. "
-                "You can list decks, count notes, help with study plans, "
-                "and answer questions about the user's Anki collection. "
-                "Keep responses concise and actionable."
-            ),
-            model=model,
-            tools=[],  # Add tools like list_decks, get_note_count, etc.
-        )
+        model = __import__("os").environ.get("AI_CHAT_MODEL", "deepseek-chat")
+        return build_agent(model=model)
 
-    # ------------------------------------------------------------------
-    # Dialog
-    # ------------------------------------------------------------------
+    async def _run_agent(self, prompt: str) -> str:
+        """Run the agent asynchronously and return the final output."""
+        provider = self._get_agent_provider()
+        agent = self._build_agent()
+        return await run_agent(prompt, provider, agent)
     def _open_agent_chat_dialog(self, _event: ft.ControlEvent | None = None) -> None:
         """Open the AI agent chat popup dialog."""
         dialog_prompt = ft.TextField(

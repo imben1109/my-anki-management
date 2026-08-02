@@ -1,25 +1,23 @@
-"""AI image generation dialog — Pollinations.ai (free) and Qwen Image (via OpenRouter)."""
+"""AI image generation dialog — Pollinations.ai (free) and OpenRouter.
+
+API logic lives in src/api/image_gen.py. This mixin provides the Flet dialog UI.
+"""
 
 from __future__ import annotations
 
 import os
 import threading
-import urllib.parse
 from pathlib import Path
 
 import flet as ft
 
-
-# Available providers
-PROVIDER_POLLINATIONS = "pollinations"
-PROVIDER_OPENROUTER = "openrouter"
-
-OPENROUTER_IMAGE_MODELS = [
-    "black-forest-labs/flux.2-flex",
-    "black-forest-labs/flux.2-pro",
-    "bytedance-seed/seedream-4.5",
-    "openai/gpt-image-2",
-]
+from src.api.image_gen import (
+    PROVIDER_POLLINATIONS,
+    PROVIDER_OPENROUTER,
+    OPENROUTER_IMAGE_MODELS,
+    generate_pollinations,
+    generate_openrouter,
+)
 
 
 class _ImageGenMixin:
@@ -175,30 +173,22 @@ class _ImageGenMixin:
         ring: ft.ProgressRing,
         save_btn: ft.TextButton | None,
     ) -> None:
-        """Generate via Pollinations.ai (GET request, no API key)."""
-        encoded = urllib.parse.quote(prompt, safe="")
-        image_url = f"https://image.pollinations.ai/prompt/{encoded}?width=768&height=576&nologo=true"
+        """Generate via Pollinations.ai using src/api/image_gen.py."""
+        import base64
 
         def _worker() -> None:
-            import base64
-            import requests
-
             try:
-                r = requests.get(image_url, timeout=120)
-                if r.status_code == 200 and len(r.content) > 100:
-                    b64 = base64.b64encode(r.content).decode()
-                    image_display.src_base64 = b64
-                    image_display.visible = True
-                    self._gen_image_url = image_url
-                    self._gen_image_data = r.content
-                    self._gen_image_path = getattr(self, "selected_preview_path", None)
-                    if save_btn:
-                        save_btn.visible = True
-                    status_text.value = f"Generated: {prompt[:50]}..."
-                    status_text.color = ft.Colors.GREEN_700
-                else:
-                    status_text.value = f"Generation failed (HTTP {r.status_code})"
-                    status_text.color = ft.Colors.RED_700
+                img_bytes = generate_pollinations(prompt)
+                b64 = base64.b64encode(img_bytes).decode()
+                image_display.src_base64 = b64
+                image_display.visible = True
+                self._gen_image_url = f"pollinations:{prompt[:30]}"
+                self._gen_image_data = img_bytes
+                self._gen_image_path = getattr(self, "selected_preview_path", None)
+                if save_btn:
+                    save_btn.visible = True
+                status_text.value = f"Generated: {prompt[:50]}..."
+                status_text.color = ft.Colors.GREEN_700
             except Exception as exc:
                 status_text.value = f"Error: {exc}"
                 status_text.color = ft.Colors.RED_700
@@ -220,7 +210,9 @@ class _ImageGenMixin:
         ring: ft.ProgressRing,
         save_btn: ft.TextButton | None,
     ) -> None:
-        """Generate via Qwen Image on OpenRouter."""
+        """Generate via OpenRouter using src/api/image_gen.py."""
+        import base64
+
         api_key = os.environ.get("OPENROUTER_API_KEY", "")
         if not api_key:
             ring.visible = False
@@ -230,50 +222,18 @@ class _ImageGenMixin:
             return
 
         def _worker() -> None:
-            import base64
-            import json
-            import requests
-
             try:
-                r = requests.post(
-                    "https://openrouter.ai/api/v1/images",
-                    headers={
-                        "Authorization": f"Bearer {api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "model": model,
-                        "prompt": prompt,
-                        "response_format": "b64_json",
-                    },
-                    timeout=180,
-                )
-                if r.status_code == 200:
-                    data = r.json()
-                    img_data = data.get("data", [])
-                    if isinstance(img_data, list) and len(img_data) > 0:
-                        img_b64 = img_data[0].get("b64_json", "")
-                    elif isinstance(img_data, str):
-                        img_b64 = img_data
-                    else:
-                        img_b64 = ""
-                    if img_b64:
-                        image_display.src_base64 = img_b64
-                        image_display.visible = True
-                        self._gen_image_url = f"openrouter:{model}:{prompt[:30]}"
-                        self._gen_image_data = base64.b64decode(img_b64)
-                        self._gen_image_path = getattr(self, "selected_preview_path", None)
-                        if save_btn:
-                            save_btn.visible = True
-                        status_text.value = f"Generated: {prompt[:50]}..."
-                        status_text.color = ft.Colors.GREEN_700
-                    else:
-                        status_text.value = f"No image in response: {data.get('error', data)}"
-                        status_text.color = ft.Colors.RED_700
-                else:
-                    err = r.text[:300]
-                    status_text.value = f"OpenRouter error ({r.status_code}): {err}"
-                    status_text.color = ft.Colors.RED_700
+                img_bytes = generate_openrouter(prompt, api_key, model=model)
+                b64 = base64.b64encode(img_bytes).decode()
+                image_display.src_base64 = b64
+                image_display.visible = True
+                self._gen_image_url = f"openrouter:{model}:{prompt[:30]}"
+                self._gen_image_data = img_bytes
+                self._gen_image_path = getattr(self, "selected_preview_path", None)
+                if save_btn:
+                    save_btn.visible = True
+                status_text.value = f"Generated: {prompt[:50]}..."
+                status_text.color = ft.Colors.GREEN_700
             except Exception as exc:
                 status_text.value = f"Error: {exc}"
                 status_text.color = ft.Colors.RED_700

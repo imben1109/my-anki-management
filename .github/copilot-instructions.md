@@ -9,7 +9,53 @@ An Anki note management tool with a Flet-based web UI. Uses `apy` CLI to interac
 - **Export**: Convert Anki notes to individual markdown files (one per note)
 - **Update**: Push changes from markdown files back to Anki
 - **Preview**: Built-in markdown preview with image support
-- **Copilot Panel**: Chat with GitHub Copilot CLI from within the app
+- **AI Chat**: Chat with AI assistant via OpenAI Agents SDK (DeepSeek by default)
+- **Image Gen**: Generate AI images via Pollinations.ai (free) or OpenRouter
+
+## Architecture Principles
+
+**Separation of concerns is mandatory:**
+
+| Layer | Directory | Responsibility |
+|---|---|---|
+| **API** | `src/api/` | Business logic, data processing, external API calls. No Flet imports. No UI code. |
+| **Components** | `src/ui/components/` | Reusable Flet widgets. Self-contained, no business logic. Accept data via constructor/properties, emit events via callbacks. |
+| **Views** | `src/ui/views/` | Full-screen pages that compose components. Orchestrate user flows (export → preview → update). May call `src/api/` modules directly. |
+| **App shell** | `src/ui/app.py` | Wires views together, handles navigation, creates `ft.Page`. Minimal logic. |
+
+**Rules:**
+- `src/api/` files must NOT import `flet`
+- `src/ui/components/` must NOT import from `src/api/`
+- Business logic lives in `src/api/`, never in components
+- Keep components small (under 150 lines); split if they grow
+
+## Project Structure
+
+```
+src/
+├── api/                        # Business logic & data processing (no UI)
+│   ├── export.py               # Export Anki notes → markdown files
+│   ├── update.py               # Push markdown changes → Anki via apy
+│   ├── agent.py                # AI agent setup (OpenAI Agents SDK + DeepSeek)
+│   └── image_gen.py            # Image generation API calls (Pollinations, OpenRouter)
+├── ui/
+│   ├── components/             # Reusable Flet widgets (no business logic)
+│   │   ├── deck_list.py        # Deck listing with selection
+│   │   ├── export_card.py      # Export configuration (query, output dir, run)
+│   │   ├── update_card.py      # Update configuration (target path, run)
+│   │   ├── preview_panel.py    # Markdown preview + editable fields
+│   │   ├── file_browser.py     # File list with search + selection
+│   │   ├── status_bar.py       # Status text + progress ring + log
+│   │   ├── chat_dialog.py      # AI chat dialog (shared by agent + CLI copilot)
+│   │   └── image_gen_dialog.py # Image generation dialog
+│   ├── views/                  # Full-page views composing components
+│   │   ├── main_view.py        # Main workspace: decks + export/update cards
+│   │   └── preview_view.py     # Preview workspace: file browser + markdown preview
+│   └── app.py                  # App shell — wires views, no heavy logic
+├── main.py                     # Desktop entry point
+└── web.py                      # Web entry point (loads .env, starts image server)
+```
+
 
 ## Key Tools
 
@@ -34,13 +80,12 @@ python3 src/web.py
 ```
 
 Entry points:
-- `src/web.py` — Launcher, sets view to `WEB_BROWSER`
-- `src/ui/app.py` — Main app class, builds layout
-- `src/ui/decks.py` — `_DecksMixin` with export/update/preview logic
-- `src/ui/copilot.py` — Copilot chat panel
-- `src/ui/image_gen.py` — AI image generation panel
-- `src/api/export.py` — Export script (also usable standalone)
-- `src/api/update.py` — Update script (also usable standalone)
+- `src/web.py` — Launcher, sets view to `WEB_BROWSER`, loads `.env`
+- `src/ui/app.py` — App shell, composes views
+- `src/ui/views/main_view.py` — Main workspace view
+- `src/ui/views/preview_view.py` — Preview workspace view
+- `src/ui/components/*.py` — Reusable Flet widgets
+- `src/api/*.py` — Business logic (no Flet imports)
 
 ### Export Script (standalone)
 
