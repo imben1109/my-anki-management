@@ -42,6 +42,7 @@ def build_file_browser(
     on_search: Callable[[ft.ControlEvent], None],
     on_refresh: Callable[[], None],
     search_field_ref: ft.TextField | None = None,
+    file_list: ft.ListView | None = None,
 ) -> ft.Container:
     """Build the file browser with search and refresh.
 
@@ -83,7 +84,11 @@ def build_file_browser(
             )
         ]
 
-    file_list = ft.ListView(controls=controls, expand=True, spacing=2, padding=0)
+    # Build file list — use shared list if provided, otherwise create new
+    if file_list is not None:
+        file_list.controls = controls
+    else:
+        file_list = ft.ListView(controls=controls, expand=True, spacing=2, padding=0)
 
     return ft.Container(
         content=ft.Column(

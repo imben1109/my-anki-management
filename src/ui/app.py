@@ -129,8 +129,8 @@ class AnkiManagerUI(_HelpersMixin, _AgentChatMixin, _ImageGenMixin, _DecksMixin)
         self.page.overlay.append(self.update_dir_picker)
         self.page.overlay.append(self.update_file_picker)
 
-        self._build_ui()
         self._refresh_preview_files()
+        self._build_ui()
         self.refresh_decks()
 
     # ------------------------------------------------------------------
@@ -175,6 +175,7 @@ class AnkiManagerUI(_HelpersMixin, _AgentChatMixin, _ImageGenMixin, _DecksMixin)
             preview_files=self.preview_files,
             selected_preview_path=self.selected_preview_path,
             output_dir=self.output_field.value or "",
+            file_list_view=self.preview_file_list,
             preview_search_value=self.preview_search_field.value or "",
             preview_search_field=self.preview_search_field,
             on_select_file=self._preview_markdown_file,
