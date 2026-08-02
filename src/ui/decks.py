@@ -253,11 +253,16 @@ class _DecksMixin:
     def _refresh_preview_files(self) -> None:
         output_path = Path(self.output_field.value.strip())
         files: list[tuple[float, Path]] = []
+        deck_dirs: set[str] = set()
         if output_path.is_dir():
             try:
                 for path in output_path.rglob("*.md"):
                     try:
                         files.append((path.stat().st_mtime, path))
+                        # Collect parent dir name as deck name
+                        rel = path.relative_to(output_path)
+                        if len(rel.parts) > 1:
+                            deck_dirs.add(rel.parts[0])
                     except OSError:
                         continue
             except OSError as exc:
@@ -269,6 +274,16 @@ class _DecksMixin:
         ]
         if self.selected_preview_path not in self.preview_files:
             self.selected_preview_path = None
+
+        # Update exported decks list and dropdown options
+        self.exported_decks = sorted(deck_dirs)
+        dropdown = self.deck_filter_dropdown
+        dropdown.options = [ft.dropdown.Option("__all__", "All decks")] + [
+            ft.dropdown.Option(d, d) for d in self.exported_decks
+        ]
+        if dropdown.value not in {o.key for o in dropdown.options}:
+            dropdown.value = "__all__"
+
         self._render_preview_file_list()
         # Don't auto-switch to preview during startup — only when user clicks "Markdown preview"
 
@@ -276,14 +291,15 @@ class _DecksMixin:
     def _on_preview_search(self, _event: ft.ControlEvent) -> None:
         """Filter preview files by search text in name, then content."""
         query = self.preview_search_field.value.strip().lower()
+        base_files = self._get_deck_filtered_files()
         if not query:
-            self._render_preview_file_list()
+            self._render_preview_file_list(files=base_files)
             return
 
         # Phase 1: filter by filename (fast, no disk I/O)
-        name_matches = [p for p in self.preview_files if query in p.name.lower()]
+        name_matches = [p for p in base_files if query in p.name.lower()]
         name_set = set(name_matches)
-        remaining = [p for p in self.preview_files if p not in name_set]
+        remaining = [p for p in base_files if p not in name_set]
 
         # Phase 2: for remaining, check cached content
         content_matches = []
@@ -293,10 +309,25 @@ class _DecksMixin:
                 if query in cached.lower():
                     content_matches.append(p)
                     continue
-            # If not cached, only read on enter (not on every keystroke)
 
         filtered = name_matches + content_matches
         self._render_preview_file_list(files=filtered)
+
+
+    def _get_deck_filtered_files(self) -> list[Path]:
+        """Return preview files filtered by the active deck dropdown selection."""
+        deck = self.deck_filter_dropdown.value
+        if not deck or deck == "__all__":
+            return list(self.preview_files)
+        output_path = Path(self.output_field.value.strip())
+        return [
+            p for p in self.preview_files
+            if p.relative_to(output_path).parts[0] == deck
+        ]
+
+    def _on_deck_filter_change(self, _event: ft.ControlEvent) -> None:
+        """Re-apply search + deck filter when deck dropdown changes."""
+        self._on_preview_search(None)
 
 
     def _render_preview_file_list(self, files: list[Path] | None = None) -> None:

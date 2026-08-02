@@ -43,6 +43,7 @@ def build_file_browser(
     on_refresh: Callable[[], None],
     search_field_ref: ft.TextField | None = None,
     file_list: ft.ListView | None = None,
+    deck_filter: ft.Dropdown | None = None,
 ) -> ft.Container:
     """Build the file browser with search and refresh.
 
@@ -94,6 +95,7 @@ def build_file_browser(
         content=ft.Column(
             controls=[
                 ft.Text("Exported Markdown files", weight=ft.FontWeight.BOLD),
+                deck_filter or ft.Container(),
                 search_field,
                 file_list,
             ],

@@ -29,7 +29,7 @@ An Anki note management tool with a Flet-based web UI. Uses `apy` CLI to interac
 - Business logic lives in `src/api/`, never in components
 - Keep components small (under 150 lines); split if they grow
 
-## Project Structure
+## Project Structure (Example)
 
 ```
 src/
@@ -114,13 +114,6 @@ The export pipeline:
 
 Images are stored alongside the markdown files — the same model Anki uses. No base64 embedding. The markdown files reference images via relative paths and display correctly in any local markdown viewer.
 
-### Available Skills
-
-- `anki-decks` — List Anki decks via `apy list-decks`
-- `anki-list` — List Anki notes via `apy list-notes -v`
-- `anki-export` — Export notes to markdown files
-- `anki-update` — Update notes from markdown files
-
 ## Automated UI Testing with playwright-cli
 
 When `playwright-cli` is installed, use it to verify UI changes end-to-end before reporting completion.
@@ -168,7 +161,3 @@ playwright-cli resize 1280 900
 - Elements may be outside the viewport — use `resize` or `eval` for JS clicks
 - The app uses `page.open(dialog)` / `page.close(dialog)` for non-blocking dialogs (not `page.dialog`)
 - Exported files go to `anki-export/` by default (gitignored)
-
-## Commit Convention
-
-Include `Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>` in commit messages.

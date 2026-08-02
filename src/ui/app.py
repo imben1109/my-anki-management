@@ -44,6 +44,8 @@ class AnkiManagerUI(_HelpersMixin, _AgentChatMixin, _ImageGenMixin, _DecksMixin)
         self.selected_deck: str | None = None
         self.selected_preview_path: Path | None = None
         self.preview_files: list[Path] = []
+        self.exported_decks: list[str] = []
+        self._deck_filter_active: str | None = None
         self._md_cache: dict[Path, str] = {}
         self._preview_row_map: dict[Path, ft.Container] = {}
         self.preview_load_request = 0
@@ -119,6 +121,14 @@ class AnkiManagerUI(_HelpersMixin, _AgentChatMixin, _ImageGenMixin, _DecksMixin)
             read_only=True, expand=True,
             text_style=ft.TextStyle(font_family="monospace", size=13),
         )
+        self.deck_filter_dropdown = ft.Dropdown(
+            label="Deck filter",
+            hint_text="All decks",
+            options=[ft.dropdown.Option("__all__", "All decks")],
+            value="__all__",
+            on_change=self._on_deck_filter_change,
+            dense=True,
+        )
         self._copilot_dialog: ft.AlertDialog | None = None
 
         # --- File pickers ---
@@ -176,6 +186,7 @@ class AnkiManagerUI(_HelpersMixin, _AgentChatMixin, _ImageGenMixin, _DecksMixin)
             selected_preview_path=self.selected_preview_path,
             output_dir=self.output_field.value or "",
             file_list_view=self.preview_file_list,
+            deck_filter_dropdown=self.deck_filter_dropdown,
             preview_search_value=self.preview_search_field.value or "",
             preview_search_field=self.preview_search_field,
             on_select_file=self._preview_markdown_file,
