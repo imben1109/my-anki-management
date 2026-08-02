@@ -15,6 +15,14 @@ import flet as ft
 import requests
 
 from src.ui.helpers import parse_decks
+from src.api.image_gen import (
+    PROVIDER_POLLINATIONS,
+    PROVIDER_OPENROUTER,
+    OPENROUTER_IMAGE_MODELS,
+    IMAGE_DIMENSIONS,
+    generate_pollinations,
+    generate_openrouter,
+)
 
 
 MACOS_FOLDER_PICKER_SCRIPT = """
@@ -578,34 +586,158 @@ class _DecksMixin:
         self.page.update()
 
     def _batch_generate_images(self, _event: ft.ControlEvent | None = None) -> None:
-        """Batch process all preview cards: AI description → OpenRouter seedream image → attach → update to Anki."""
+        """Open batch settings dialog, then kick off the worker."""
         if not self.preview_files:
             self._report_copilot_issue("No exported markdown files found. Export a deck first.")
             return
 
-        # Pre-scan: count cards without images
+        # --- Deck scope ---
+        deck_options = [ft.dropdown.Option("__all__", "All decks")] + [
+            ft.dropdown.Option(d, d) for d in (getattr(self, "exported_decks", None) or [])
+        ]
+        deck_dd = ft.Dropdown(
+            label="Deck scope",
+            options=deck_options,
+            value="__all__",
+        )
+
+        # --- Provider ---
+        provider_dd = ft.Dropdown(
+            label="Provider",
+            options=[
+                ft.dropdown.Option(PROVIDER_POLLINATIONS, "Pollinations.ai (free)"),
+                ft.dropdown.Option(PROVIDER_OPENROUTER, "OpenRouter"),
+            ],
+            value=PROVIDER_POLLINATIONS,
+        )
+
+        # --- Model ---
+        model_ids = [m["id"] for m in OPENROUTER_IMAGE_MODELS]
+        model_dd = ft.Dropdown(
+            label="Model",
+            options=[ft.dropdown.Option(m) for m in model_ids],
+            value=model_ids[0],
+            visible=False,
+        )
+
+        # --- Dimensions ---
+        dim_keys = list(IMAGE_DIMENSIONS.keys())
+        dim_dd = ft.Dropdown(
+            label="Dimensions",
+            options=[ft.dropdown.Option(k) for k in dim_keys],
+            value=dim_keys[1],
+            dense=True,
+            visible=True,
+        )
+
+        def _model_supports_dimensions() -> bool:
+            if provider_dd.value == PROVIDER_POLLINATIONS:
+                return True
+            mid = model_dd.value
+            for m in OPENROUTER_IMAGE_MODELS:
+                if m["id"] == mid:
+                    return m["supports_dimensions"]
+            return False
+
+        def on_provider_change(e: ft.ControlEvent) -> None:
+            model_dd.visible = provider_dd.value == PROVIDER_OPENROUTER
+            dim_dd.visible = _model_supports_dimensions()
+            self.page.update()
+
+        def on_model_change(e: ft.ControlEvent) -> None:
+            dim_dd.visible = _model_supports_dimensions()
+            self.page.update()
+
+        provider_dd.on_change = on_provider_change
+        model_dd.on_change = on_model_change
+
+        # --- Mode ---
+        mode_dd = ft.Dropdown(
+            label="Mode",
+            options=[
+                ft.dropdown.Option("missing", "Generate missing only"),
+                ft.dropdown.Option("all", "Regenerate all"),
+            ],
+            value="missing",
+        )
+
+        dialog = ft.AlertDialog(
+            title=ft.Text("Batch Image Generation", size=18, weight=ft.FontWeight.BOLD),
+            content=ft.Column(
+                controls=[
+                    deck_dd,
+                    ft.Row(controls=[provider_dd, model_dd], spacing=10),
+                    dim_dd,
+                    mode_dd,
+                ],
+                spacing=12,
+                width=460,
+            ),
+            actions=[
+                ft.TextButton("Cancel", on_click=lambda e: self.page.close(dialog)),
+                ft.FilledButton(
+                    "Start Batch",
+                    icon=ft.Icons.AUTO_AWESOME,
+                    on_click=lambda e: self._run_batch_worker(
+                        dialog, deck_dd, provider_dd, model_dd, dim_dd, mode_dd,
+                    ),
+                ),
+            ],
+        )
+        self.page.open(dialog)
+
+    def _run_batch_worker(
+        self,
+        dialog: ft.AlertDialog,
+        deck_dd: ft.Dropdown,
+        provider_dd: ft.Dropdown,
+        model_dd: ft.Dropdown,
+        dim_dd: ft.Dropdown,
+        mode_dd: ft.Dropdown,
+    ) -> None:
+        """Collect settings, close dialog, start the batch thread."""
+        deck_filter = deck_dd.value or "__all__"
+        provider = provider_dd.value or PROVIDER_POLLINATIONS
+        model = model_dd.value or model_dd.options[0].key if model_dd.options else ""
+        dim_key = dim_dd.value or list(IMAGE_DIMENSIONS.keys())[1]
+        width, height = IMAGE_DIMENSIONS[dim_key] if dim_dd.visible else (None, None)
+        regenerate_all = mode_dd.value == "all"
+
+        self.page.close(dialog)
+
+        # Filter files by deck
+        if deck_filter == "__all__":
+            files = list(self.preview_files)
+        else:
+            output_path = Path(self.output_field.value.strip())
+            files = [
+                p for p in self.preview_files
+                if p.relative_to(output_path).parts[0] == deck_filter
+            ]
+
+        if not files:
+            self._report_copilot_issue("No files in selected deck.")
+            return
+
+        # Pre-scan
         to_process: list[Path] = []
-        for path in self.preview_files:
+        for path in files:
             try:
                 content = path.read_text(encoding="utf-8")
             except (OSError, UnicodeDecodeError):
                 continue
             front = _extract_section("Front", content)
             image = _extract_section("Image", content)
-            if front and not image:
-                to_process.append(path)
+            if front:
+                if regenerate_all or not image:
+                    to_process.append(path)
 
         if not to_process:
-            self._report_copilot_issue("All cards already have images. Nothing to do.")
-            return
-
-        api_key = os.environ.get("OPENROUTER_API_KEY", "")
-        ai_key = os.environ.get("AI_CHAT_API_KEY", "")
-        if not api_key:
-            self._report_copilot_issue("Set OPENROUTER_API_KEY environment variable.")
-            return
-        if not ai_key:
-            self._report_copilot_issue("Set AI_CHAT_API_KEY environment variable.")
+            self._report_copilot_issue(
+                "All cards already have images. Nothing to do."
+                if not regenerate_all
+                else "No cards with Front fields found."
+            )
             return
 
         total = len(to_process)
@@ -614,123 +746,134 @@ class _DecksMixin:
         self.copilot_progress_ring.visible = True
         self.page.update()
 
-        def _worker() -> None:
-            import asyncio
-            import base64
-            import re as _re
+        threading.Thread(
+            target=self._batch_worker_thread,
+            args=(to_process, total, provider, model, width, height),
+            daemon=True,
+        ).start()
 
-            success = 0
-            failed = 0
+    def _batch_worker_thread(
+        self,
+        to_process: list[Path],
+        total: int,
+        provider: str,
+        model: str,
+        width: int | None,
+        height: int | None,
+    ) -> None:
+        """Thread worker: AI description -> image gen -> save -> update to Anki."""
+        import asyncio
+        import base64
 
-            for i, path in enumerate(to_process):
-                name = path.name
-                try:
-                    content = path.read_text(encoding="utf-8")
-                    front = _extract_section("Front", content)
-                    if not front:
-                        failed += 1
-                        continue
-
-                    # Step 1: AI description
-                    desc_prompt = (
-                        "You are a language learning assistant using the comprehensible input method. "
-                        "Given a vocabulary word or phrase, create a single-sentence, vivid image description "
-                        "that clearly illustrates its meaning in a natural scene. "
-                        "Focus on the core meaning — avoid abstract metaphors. "
-                        "Keep it under 80 words. Do NOT include any explanation, just the description.\n\n"
-                        f"Vocabulary: {front}"
-                    )
-                    try:
-                        description = asyncio.run(self._run_agent(desc_prompt)).strip()
-                    except Exception as exc:
-                        self._log_batch_progress(i, total, name, f"AI error: {exc}", False)
-                        failed += 1
-                        continue
-
-                    # Step 2: Generate image via OpenRouter seedream
-                    try:
-                        r = requests.post(
-                            "https://openrouter.ai/api/v1/images",
-                            headers={
-                                "Authorization": f"Bearer {api_key}",
-                                "Content-Type": "application/json",
-                            },
-                            json={
-                                "model": "bytedance-seed/seedream-4.5",
-                                "prompt": description,
-                                "response_format": "b64_json",
-                            },
-                            timeout=180,
-                        )
-                        if r.status_code != 200:
-                            self._log_batch_progress(i, total, name, f"Image HTTP {r.status_code}", False)
-                            failed += 1
-                            continue
-
-                        data = r.json()
-                        img_data = data.get("data", [])
-                        if isinstance(img_data, list) and len(img_data) > 0:
-                            img_b64 = img_data[0].get("b64_json", "")
-                        elif isinstance(img_data, str):
-                            img_b64 = img_data
-                        else:
-                            self._log_batch_progress(i, total, name, "No image in response", False)
-                            failed += 1
-                            continue
-
-                        img_bytes = base64.b64decode(img_b64)
-                    except Exception as exc:
-                        self._log_batch_progress(i, total, name, f"Image error: {exc}", False)
-                        failed += 1
-                        continue
-
-                    # Step 3: Save image
-                    images_dir = path.parent / "images"
-                    images_dir.mkdir(parents=True, exist_ok=True)
-                    safe_name = _re.sub(r"[^\w\-]", "_", front)[:40]
-                    img_filename = f"batch-{safe_name}.png"
-                    img_path = images_dir / img_filename
-                    img_path.write_bytes(img_bytes)
-
-                    # Step 4: Update markdown
-                    content = _re.sub(r"\n*## Image\n.*?(?=\n#|\Z)", "", content, flags=_re.DOTALL)
-                    md_ref = f"![image](images/{img_filename})"
-                    content = content.rstrip() + f"\n\n## Image\n{md_ref}\n"
-                    path.write_text(content, encoding="utf-8")
-
-                    success += 1
-                    self._log_batch_progress(i, total, name, "✓", True)
-
-                except Exception as exc:
-                    failed += 1
-                    self._log_batch_progress(i, total, name, f"Error: {exc}", False)
-
-            # Step 5: Update all to Anki
-            final_msg = f"Batch done: {success} updated, {failed} failed."
-            if success > 0:
-                final_msg += " Updating Anki..."
-                self.copilot_status_text.value = final_msg
-                self.copilot_status_text.color = ft.Colors.BLUE_700
-                self.page.update()
-
-                output_path = Path(self.output_field.value.strip())
-                if self._ensure_scripts():
-                    cmd = [sys.executable, str(self.update_script), str(output_path)]
-                    import subprocess
-                    subprocess.run(cmd, capture_output=True, timeout=300)
-                    final_msg = f"Batch done: {success} cards updated to Anki, {failed} failed."
-
-            self.copilot_status_text.value = final_msg
-            self.copilot_status_text.color = ft.Colors.GREEN_700 if failed == 0 else ft.Colors.ORANGE_700
+        api_key = os.environ.get("OPENROUTER_API_KEY", "")
+        ai_key = os.environ.get("AI_CHAT_API_KEY", "")
+        using_or = provider == PROVIDER_OPENROUTER
+        if using_or and not api_key:
+            self.copilot_status_text.value = "Set OPENROUTER_API_KEY."
+            self.copilot_status_text.color = ft.Colors.RED_700
             self.copilot_progress_ring.visible = False
             self.page.update()
-            self._refresh_preview_files()
+            return
+        if not ai_key:
+            self.copilot_status_text.value = "Set AI_CHAT_API_KEY."
+            self.copilot_status_text.color = ft.Colors.RED_700
+            self.copilot_progress_ring.visible = False
+            self.page.update()
+            return
 
-        threading.Thread(target=_worker, daemon=True).start()
+        success = 0
+        failed = 0
+
+        for i, path in enumerate(to_process):
+            name = path.name
+            try:
+                content = path.read_text(encoding="utf-8")
+                front = _extract_section("Front", content)
+                if not front:
+                    failed += 1
+                    continue
+
+                # Step 1: AI description
+                desc_prompt = (
+                    "You are a language learning assistant using the comprehensible input method. "
+                    "Given a vocabulary word or phrase, create a single-sentence, vivid image description "
+                    "that clearly illustrates its meaning in a natural scene. "
+                    "Focus on the core meaning - avoid abstract metaphors. "
+                    "Keep it under 80 words. Do NOT include any explanation, just the description.\n\n"
+                    f"Vocabulary: {front}"
+                )
+                try:
+                    description = asyncio.run(self._run_agent(desc_prompt)).strip()
+                except Exception as exc:
+                    self._log_batch_progress(i, total, name, f"AI error: {exc}", False)
+                    failed += 1
+                    continue
+
+                # Step 2: Generate image
+                try:
+                    if using_or:
+                        img_bytes = generate_openrouter(
+                            description, api_key, model=model,
+                            width=width, height=height,
+                        )
+                    else:
+                        img_bytes = generate_pollinations(
+                            description,
+                            width=width if width else 768,
+                            height=height if height else 576,
+                        )
+                except Exception as exc:
+                    self._log_batch_progress(i, total, name, f"Image error: {exc}", False)
+                    failed += 1
+                    continue
+
+                # Step 3: Save image
+                images_dir = path.parent / "images"
+                images_dir.mkdir(parents=True, exist_ok=True)
+                safe_name = re.sub(r"[^\w\-]", "_", front)[:40]
+                img_filename = f"batch-{safe_name}.png"
+                img_path = images_dir / img_filename
+                img_path.write_bytes(img_bytes)
+
+                # Step 4: Update markdown
+                content = re.sub(r"\n*## Image\n.*?(?=\n#|\Z)", "", content, flags=re.DOTALL)
+                md_ref = f"![image](images/{img_filename})"
+                content = content.rstrip() + f"\n\n## Image\n{md_ref}\n"
+                path.write_text(content, encoding="utf-8")
+
+                success += 1
+                self._log_batch_progress(i, total, name, "\u2713", True)
+
+            except Exception as exc:
+                failed += 1
+                self._log_batch_progress(i, total, name, f"Error: {exc}", False)
+
+        # Final: update to Anki if any succeeded
+        final_msg = f"Batch done: {success} updated, {failed} failed."
+        if success > 0:
+            final_msg += " Updating Anki..."
+            self.copilot_status_text.value = final_msg
+            self.copilot_status_text.color = ft.Colors.BLUE_700
+            self.page.update()
+
+            output_path = Path(self.output_field.value.strip())
+            if self._ensure_scripts():
+                import subprocess as _sp
+                _sp.run(
+                    [sys.executable, str(self.update_script), str(output_path)],
+                    capture_output=True, timeout=300,
+                )
+                final_msg = f"Batch done: {success} cards updated to Anki, {failed} failed."
+
+        self.copilot_status_text.value = final_msg
+        self.copilot_status_text.color = ft.Colors.GREEN_700 if failed == 0 else ft.Colors.ORANGE_700
+        self.copilot_progress_ring.visible = False
+        self.page.update()
+        self._refresh_preview_files()
 
     def _log_batch_progress(self, i: int, total: int, name: str, detail: str, ok: bool) -> None:
         """Update status bar with batch progress."""
-        self.copilot_status_text.value = f"Batch: {i+1}/{total} — {name} {detail}"
+        self.copilot_status_text.value = f"Batch: {i+1}/{total} - {name} {detail}"
         self.copilot_status_text.color = ft.Colors.BLUE_700 if ok else ft.Colors.ORANGE_700
         self.page.update()
 

@@ -27,11 +27,11 @@ OPENROUTER_IMAGE_MODELS = [
 # Preset dimension options (width × height, must be multiples of 16)
 # Only used for models with supports_dimensions=True
 IMAGE_DIMENSIONS = {
-    "Small (512×384)  — $0.014":  (512, 384),
-    "Medium (768×576) — $0.014":  (768, 576),
-    "Large (1024×768) — $0.014":  (1024, 768),
-    "HD (1360×768)    — $0.015":  (1360, 768),
-    "FHD (1920×1088)  — $0.016": (1920, 1088),
+    "Small (512×384)":   (512, 384),
+    "Medium (768×576)":  (768, 576),
+    "Large (1024×768)":  (1024, 768),
+    "HD (1360×768)":     (1360, 768),
+    "FHD (1920×1088)":   (1920, 1088),
 }
 
 
