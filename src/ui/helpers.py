@@ -4,26 +4,14 @@ from __future__ import annotations
 
 import shlex
 import subprocess
-import sys
 import threading
 from pathlib import Path
 from typing import Callable
 
 import flet as ft
 
-def parse_decks(apy_info: str) -> list[str]:
-    decks: list[str] = []
-    in_decks = False
-    for raw_line in apy_info.splitlines():
-        line = raw_line.rstrip("\n")
-        if line.startswith("Decks:"):
-            in_decks = True
-            continue
-        if in_decks and line.startswith("Model"):
-            break
-        if in_decks and line.startswith("  - "):
-            decks.append(line.replace("  - ", "", 1).strip())
-    return decks
+from src.api.parsing import parse_decks  # re-exported for convenience
+
 
 
 class _HelpersMixin:

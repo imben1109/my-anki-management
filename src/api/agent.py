@@ -1,7 +1,4 @@
-"""AI Agent API — provider creation, agent building, and execution.
-
-Extracted from src/ui/agent_chat.py to keep business logic separate from UI.
-"""
+"""AI Agent API — provider creation, agent building, and execution."""
 
 from __future__ import annotations
 

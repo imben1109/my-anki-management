@@ -1,6 +1,6 @@
 """AI image generation dialog — Pollinations.ai (free) and OpenRouter.
 
-API logic lives in src/api/image_gen.py. This mixin provides the Flet dialog UI.
+Flet dialog UI for single-image generation. Backend logic in src/api/image_gen.py.
 """
 
 from __future__ import annotations

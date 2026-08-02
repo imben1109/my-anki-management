@@ -4,25 +4,24 @@ from __future__ import annotations
 
 import os
 import re
-import shlex
 import shutil
 import subprocess
 import sys
 import threading
 from pathlib import Path
+from typing import Callable
 
 import flet as ft
-import requests
 
-from src.ui.helpers import parse_decks
+from src.api.markdown import extract_section, build_description_prompt, rebuild_note_content, save_image_and_update_note
+from src.api.parsing import parse_decks, deck_query
 from src.api.image_gen import (
     PROVIDER_POLLINATIONS,
     PROVIDER_OPENROUTER,
     OPENROUTER_IMAGE_MODELS,
     IMAGE_DIMENSIONS,
-    generate_pollinations,
-    generate_openrouter,
 )
+from src.api.batch import process_single_card, sync_to_anki
 
 
 MACOS_FOLDER_PICKER_SCRIPT = """
@@ -33,13 +32,6 @@ on run argv
     return POSIX path of pickedFolder
 end run
 """
-
-
-def _extract_section(name: str, text: str) -> str:
-    """Extract the content of a ## section from markdown text."""
-    pattern = rf"^## {re.escape(name)}(?:\s+\(markdown\))?\n(.*?)(?=^## |\Z)"
-    match = re.search(pattern, text, flags=re.MULTILINE | re.DOTALL)
-    return match.group(1).strip() if match else ""
 
 
 class _DecksMixin:
@@ -113,8 +105,7 @@ class _DecksMixin:
 
 
     def _deck_query(self, deck_name: str) -> str:
-        escaped = deck_name.replace('"', r"\"")
-        return f'deck:"{escaped}"'
+        return deck_query(deck_name)
 
 
     def export_selected_deck(self, _event: ft.ControlEvent | None = None) -> None:
@@ -549,31 +540,22 @@ class _DecksMixin:
             self._report_issue("No file selected for preview.")
             return
 
-        # Reconstruct markdown from the original file header + edited fields
         try:
             original = path.read_text(encoding="utf-8")
         except OSError as exc:
             self._report_copilot_issue(f"Cannot read file: {exc}")
             return
 
-        # Extract the original header (everything before ## Front)
-        header_end = original.find("\n## Front")
-        if header_end == -1:
-            header_end = original.find("\n## Front")
-        if header_end == -1:
-            self._report_copilot_issue("Cannot find ## Front section in file.")
+        try:
+            new_md = rebuild_note_content(
+                original,
+                self.editable_front.value.strip(),
+                self.editable_back.value.strip(),
+                self.editable_image.value.strip(),
+            )
+        except ValueError as exc:
+            self._report_copilot_issue(str(exc))
             return
-        header = original[:header_end]
-
-        front = self.editable_front.value.strip()
-        back = self.editable_back.value.strip()
-        image = self.editable_image.value.strip()
-
-        new_md = f"{header}\n## Front\n{front}\n\n## Back\n{back}\n"
-        if image:
-            new_md += f"## Image\n{image}\n"
-        else:
-            new_md += "## Image\n"
 
         try:
             path.write_text(new_md, encoding="utf-8")
@@ -726,8 +708,8 @@ class _DecksMixin:
                 content = path.read_text(encoding="utf-8")
             except (OSError, UnicodeDecodeError):
                 continue
-            front = _extract_section("Front", content)
-            image = _extract_section("Image", content)
+            front = extract_section("Front", content)
+            image = extract_section("Image", content)
             if front:
                 if regenerate_all or not image:
                     to_process.append(path)
@@ -761,10 +743,7 @@ class _DecksMixin:
         width: int | None,
         height: int | None,
     ) -> None:
-        """Thread worker: AI description -> image gen -> save -> update to Anki."""
-        import asyncio
-        import base64
-
+        """Thread worker using src/api/batch.py for the actual processing."""
         api_key = os.environ.get("OPENROUTER_API_KEY", "")
         ai_key = os.environ.get("AI_CHAT_API_KEY", "")
         using_or = provider == PROVIDER_OPENROUTER
@@ -786,67 +765,21 @@ class _DecksMixin:
 
         for i, path in enumerate(to_process):
             name = path.name
-            try:
-                content = path.read_text(encoding="utf-8")
-                front = _extract_section("Front", content)
-                if not front:
-                    failed += 1
-                    continue
-
-                # Step 1: AI description
-                desc_prompt = (
-                    "You are a language learning assistant using the comprehensible input method. "
-                    "Given a vocabulary word or phrase, create a single-sentence, vivid image description "
-                    "that clearly illustrates its meaning in a natural scene. "
-                    "Focus on the core meaning - avoid abstract metaphors. "
-                    "Keep it under 80 words. Do NOT include any explanation, just the description.\n\n"
-                    f"Vocabulary: {front}"
-                )
-                try:
-                    description = asyncio.run(self._run_agent(desc_prompt)).strip()
-                except Exception as exc:
-                    self._log_batch_progress(i, total, name, f"AI error: {exc}", False)
-                    failed += 1
-                    continue
-
-                # Step 2: Generate image
-                try:
-                    if using_or:
-                        img_bytes = generate_openrouter(
-                            description, api_key, model=model,
-                            width=width, height=height,
-                        )
-                    else:
-                        img_bytes = generate_pollinations(
-                            description,
-                            width=width if width else 768,
-                            height=height if height else 576,
-                        )
-                except Exception as exc:
-                    self._log_batch_progress(i, total, name, f"Image error: {exc}", False)
-                    failed += 1
-                    continue
-
-                # Step 3: Save image
-                images_dir = path.parent / "images"
-                images_dir.mkdir(parents=True, exist_ok=True)
-                safe_name = re.sub(r"[^\w\-]", "_", front)[:40]
-                img_filename = f"batch-{safe_name}.png"
-                img_path = images_dir / img_filename
-                img_path.write_bytes(img_bytes)
-
-                # Step 4: Update markdown
-                content = re.sub(r"\n*## Image\n.*?(?=\n#|\Z)", "", content, flags=re.DOTALL)
-                md_ref = f"![image](images/{img_filename})"
-                content = content.rstrip() + f"\n\n## Image\n{md_ref}\n"
-                path.write_text(content, encoding="utf-8")
-
+            ok, detail = process_single_card(
+                path=path,
+                provider=provider,
+                model=model,
+                width=width,
+                height=height,
+                api_key=api_key,
+                agent_runner=self._run_agent,
+            )
+            if ok:
                 success += 1
-                self._log_batch_progress(i, total, name, "\u2713", True)
-
-            except Exception as exc:
+                self._log_batch_progress(i, total, name, detail, True)
+            else:
                 failed += 1
-                self._log_batch_progress(i, total, name, f"Error: {exc}", False)
+                self._log_batch_progress(i, total, name, detail, False)
 
         # Final: update to Anki if any succeeded
         final_msg = f"Batch done: {success} updated, {failed} failed."
@@ -856,14 +789,11 @@ class _DecksMixin:
             self.copilot_status_text.color = ft.Colors.BLUE_700
             self.page.update()
 
-            output_path = Path(self.output_field.value.strip())
-            if self._ensure_scripts():
-                import subprocess as _sp
-                _sp.run(
-                    [sys.executable, str(self.update_script), str(output_path)],
-                    capture_output=True, timeout=300,
-                )
-                final_msg = f"Batch done: {success} cards updated to Anki, {failed} failed."
+            ok, sync_msg = sync_to_anki(
+                self.output_field.value.strip(),
+                self.update_script,
+            )
+            final_msg = f"Batch done: {success} cards {sync_msg.lower()}, {failed} failed."
 
         self.copilot_status_text.value = final_msg
         self.copilot_status_text.color = ft.Colors.GREEN_700 if failed == 0 else ft.Colors.ORANGE_700
@@ -893,14 +823,7 @@ class _DecksMixin:
             self._report_copilot_issue("No Front field found in the current note.")
             return
 
-        prompt = (
-            "You are a language learning assistant using the comprehensible input method. "
-            "Given a vocabulary word or phrase, create a single-sentence, vivid image description "
-            "that clearly illustrates its meaning in a natural scene. "
-            "Focus on the core meaning — avoid abstract metaphors. "
-            "Keep it under 80 words. Do NOT include any explanation, just the description.\n\n"
-            f"Vocabulary: {front}"
-        )
+        prompt = build_description_prompt(front)
 
         # Open the dialog first with a "generating" state, then run agent
         self._open_image_gen_dialog(
@@ -967,71 +890,46 @@ class _DecksMixin:
                 self.page.update()
             return
 
-        try:
-            content = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError) as exc:
-            if status_text:
-                status_text.value = f"Could not read note: {exc}"
-                status_text.color = ft.Colors.RED_700
-                self.page.update()
-            return
-
-        # Determine images/ folder: same directory as the .md file
-        images_dir = path.parent / "images"
-        images_dir.mkdir(parents=True, exist_ok=True)
-
-        # Generate a filename from the front content (sanitized)
-        front_content = self.editable_front.value.strip() if self.editable_front.value else ""
-        safe_name = re.sub(r"[^\w\-]", "_", front_content)[:40] if front_content else "image"
-        ext = ".jpg"
-        image_filename = f"gen-{safe_name}{ext}"
-
-        # Download the image
-        import requests
-
         if status_text:
             status_text.value = "Saving image..."
             status_text.color = ft.Colors.BLUE_700
             self.page.update()
 
-        try:
-            image_path = images_dir / image_filename
-            if image_data:
-                image_path.write_bytes(image_data)
-            else:
-                import requests
-                r = requests.get(url, timeout=120)
+        # Download from URL if no direct bytes available
+        if not image_data and url:
+            try:
+                import requests as _requests
+                r = _requests.get(url, timeout=120)
                 r.raise_for_status()
-                image_path.write_bytes(r.content)
+                image_data = r.content
+            except Exception as exc:
+                if status_text:
+                    status_text.value = f"Download failed: {exc}"
+                    status_text.color = ft.Colors.RED_700
+                    self.page.update()
+                return
+
+        front_content = self.editable_front.value.strip() if self.editable_front.value else ""
+
+        try:
+            image_filename, content = save_image_and_update_note(path, image_data, front_content)
         except Exception as exc:
             if status_text:
-                status_text.value = f"Download failed: {exc}"
-                status_text.color = ft.Colors.RED_700
-                self.page.update()
-            return
-
-        # Remove existing ## Image section, then append new one with markdown reference
-        content = re.sub(r"\n*## Image\n.*?(?=\n#|\Z)", "", content, flags=re.DOTALL)
-        md_ref = f"![image](images/{image_filename})"
-        content = content.rstrip() + f"\n\n## Image\n{md_ref}\n"
-
-        try:
-            path.write_text(content, encoding="utf-8")
-        except OSError as exc:
-            if status_text:
-                status_text.value = f"Could not write note: {exc}"
+                status_text.value = f"Could not save image: {exc}"
                 status_text.color = ft.Colors.RED_700
                 self.page.update()
             return
 
         # Update cache and editable preview fields
         self._md_cache[path] = content
-        self.editable_image.value = md_ref
+        self.editable_image.value = f"![image](images/{image_filename})"
         # Show image preview via localhost server
         output_dir = Path(self.output_field.value.strip()).resolve()
         try:
             rel_dir = path.resolve().parent.relative_to(output_dir)
-            self.editable_image_preview.src = f"http://localhost:8551/{rel_dir}/images/{image_filename}"
+            self.editable_image_preview.src = (
+                f"http://localhost:8551/{rel_dir}/images/{image_filename}"
+            )
             self.editable_image_preview.visible = True
         except ValueError:
             pass
@@ -1059,6 +957,7 @@ class _DecksMixin:
 
         # Clear saved image ref
         self._gen_image_url = None
+        self._gen_image_data = None
         self._gen_image_path = None
 
 

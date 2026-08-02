@@ -1,6 +1,5 @@
 """Image Generation API — Pollinations.ai and OpenRouter backends.
 
-Extracted from src/ui/image_gen.py to keep business logic separate from UI.
 All functions return raw image bytes — callers handle display, caching, etc.
 """
 
