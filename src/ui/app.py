@@ -141,10 +141,20 @@ class AnkiManagerUI(_HelpersMixin, _AgentChatMixin, _ImageGenMixin, _DecksMixin)
         pure function that takes callbacks and control references — no more
         inline widget construction."""
 
+        # Pre-create deck controls that the mixin methods need to update
+        if not hasattr(self, "deck_list"):
+            self.deck_list = ft.ListView(expand=True, spacing=8, padding=0)
+        if not hasattr(self, "deck_count_text"):
+            self.deck_count_text = ft.Text(
+                f"Decks: {len(self.decks)}", color=ft.Colors.ON_SURFACE_VARIANT,
+            )
+
         self.manage_workspace = build_main_view(
             decks=self.decks,
             selected_deck=self.selected_deck,
             deck_count=len(self.decks),
+            deck_list_view=self.deck_list,
+            deck_count_text=self.deck_count_text,
             on_refresh=self.refresh_decks,
             on_select_deck=self._select_deck,
             on_export_selected=self.export_selected_deck,

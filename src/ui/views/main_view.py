@@ -19,28 +19,36 @@ def build_main_view(
     decks: list[str],
     selected_deck: str | None,
     deck_count: int,
-    on_refresh: Callable[[ft.ControlEvent], None],
-    on_select_deck: Callable[[str], None],
-    on_export_selected: Callable[[ft.ControlEvent], None],
+    deck_list_view: ft.ListView | None = None,
+    deck_count_text: ft.Text | None = None,
+    on_refresh: Callable[[ft.ControlEvent], None] | None = None,
+    on_select_deck: Callable[[str], None] | None = None,
+    on_export_selected: Callable[[ft.ControlEvent], None] | None = None,
     # --- Export card ---
-    output_field: ft.TextField,
-    query_field: ft.TextField,
-    on_choose_output_folder: Callable[[], None],
-    on_export_query: Callable[[ft.ControlEvent], None],
+    output_field: ft.TextField | None = None,
+    query_field: ft.TextField | None = None,
+    on_choose_output_folder: Callable[[], None] | None = None,
+    on_export_query: Callable[[ft.ControlEvent], None] | None = None,
     # --- Update card ---
-    update_target_field: ft.TextField,
-    on_choose_update_folder: Callable[[], None],
-    on_choose_update_file: Callable[[], None],
-    on_update: Callable[[ft.ControlEvent], None],
+    update_target_field: ft.TextField | None = None,
+    on_choose_update_folder: Callable[[], None] | None = None,
+    on_choose_update_file: Callable[[], None] | None = None,
+    on_update: Callable[[ft.ControlEvent], None] | None = None,
     # --- Logs ---
-    log_field: ft.TextField,
-    status_text: ft.Text,
-    progress_ring: ft.ProgressRing,
+    log_field: ft.TextField | None = None,
+    status_text: ft.Text | None = None,
+    progress_ring: ft.ProgressRing | None = None,
 ) -> ft.Row:
     """Build the main manage-decors workspace."""
 
     # --- Left panel: deck list ---
-    deck_list_view = build_deck_list(decks, selected_deck, on_select_deck)
+    if deck_list_view is None:
+        deck_list_view = build_deck_list(decks, selected_deck, on_select_deck)
+    else:
+        render_deck_list(deck_list_view, decks, selected_deck, on_select_deck)
+
+    if deck_count_text is None:
+        deck_count_text = ft.Text(f"Decks: {deck_count}", color=ft.Colors.ON_SURFACE_VARIANT)
 
     left_panel = ft.Container(
         content=ft.Column(
@@ -48,7 +56,7 @@ def build_main_view(
                 ft.Row(
                     controls=[
                         ft.Text("Decks", size=20, weight=ft.FontWeight.BOLD),
-                        ft.Text(f"Decks: {deck_count}", color=ft.Colors.ON_SURFACE_VARIANT),
+                        deck_count_text,
                     ],
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                 ),

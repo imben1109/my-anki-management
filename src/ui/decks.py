@@ -92,41 +92,9 @@ class _DecksMixin:
 
 
     def _render_decks(self) -> None:
-        deck_controls: list[ft.Control] = []
-        for deck_name in self.decks:
-            is_selected = deck_name == self.selected_deck
-            deck_controls.append(
-                ft.Container(
-                    content=ft.ListTile(
-                        title=ft.Text(
-                            deck_name,
-                            weight=ft.FontWeight.W_600 if is_selected else None,
-                        ),
-                        dense=True,
-                    ),
-                    bgcolor=ft.Colors.BLUE_50 if is_selected else ft.Colors.SURFACE,
-                    border=ft.border.all(
-                        1,
-                        ft.Colors.BLUE_300 if is_selected else ft.Colors.OUTLINE_VARIANT,
-                    ),
-                    border_radius=10,
-                    on_click=lambda _, selected=deck_name: self._select_deck(selected),
-                )
-            )
+        from src.ui.components.deck_list import render_deck_list
 
-        if not deck_controls:
-            deck_controls.append(
-                ft.Container(
-                    content=ft.Text(
-                        "No decks loaded yet.",
-                        color=ft.Colors.ON_SURFACE_VARIANT,
-                        italic=True,
-                    ),
-                    padding=ft.padding.only(top=8),
-                )
-            )
-
-        self.deck_list.controls = deck_controls
+        render_deck_list(self.deck_list, self.decks, self.selected_deck, self._select_deck)
         self.deck_count_text.value = f"Decks: {len(self.decks)}"
         self.page.update()
 
