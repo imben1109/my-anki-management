@@ -31,8 +31,10 @@ class AnkiManagerUI(_HelpersMixin, _AgentChatMixin, _ImageGenMixin, _DecksMixin)
         self.page.theme_mode = ft.ThemeMode.SYSTEM
         self.page.window_width = 1180
         self.page.window_height = 760
-        self.page.window_min_width = 900
-        self.page.window_min_height = 620
+        self.page.window_min_width = 320
+        self.page.window_min_height = 480
+        self.page.on_resize = self._on_resize
+        self._last_is_mobile: bool | None = None
 
         # Project root is 3 levels up from src/ui/app.py
         self.base_dir = Path(__file__).resolve().parent.parent.parent
@@ -151,6 +153,9 @@ class AnkiManagerUI(_HelpersMixin, _AgentChatMixin, _ImageGenMixin, _DecksMixin)
         pure function that takes callbacks and control references — no more
         inline widget construction."""
 
+        is_mobile = self.page.width < 768 if self.page.width else False
+        self._last_is_mobile = is_mobile
+
         # Pre-create deck controls that the mixin methods need to update
         if not hasattr(self, "deck_list"):
             self.deck_list = ft.ListView(expand=True, spacing=8, padding=0)
@@ -160,6 +165,7 @@ class AnkiManagerUI(_HelpersMixin, _AgentChatMixin, _ImageGenMixin, _DecksMixin)
             )
 
         self.manage_workspace = build_main_view(
+            is_mobile=is_mobile,
             decks=self.decks,
             selected_deck=self.selected_deck,
             deck_count=len(self.decks),
@@ -182,6 +188,7 @@ class AnkiManagerUI(_HelpersMixin, _AgentChatMixin, _ImageGenMixin, _DecksMixin)
         )
 
         self.preview_workspace = build_preview_view(
+            is_mobile=is_mobile,
             preview_files=self.preview_files,
             selected_preview_path=self.selected_preview_path,
             output_dir=self.output_field.value or "",
@@ -245,6 +252,15 @@ class AnkiManagerUI(_HelpersMixin, _AgentChatMixin, _ImageGenMixin, _DecksMixin)
                 expand=True,
             )
         )
+
+    def _on_resize(self, _event: ft.ControlEvent) -> None:
+        """Rebuild UI when crossing the mobile/desktop breakpoint."""
+        is_mobile = self.page.width < 768 if self.page.width else False
+        if is_mobile == self._last_is_mobile:
+            return
+        self.page.controls.clear()
+        self._build_ui()
+        self.page.update()
 
 
 

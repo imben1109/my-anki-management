@@ -15,13 +15,24 @@ import requests
 PROVIDER_POLLINATIONS = "pollinations"
 PROVIDER_OPENROUTER = "openrouter"
 
-# Available OpenRouter image models
+# Available OpenRouter image models with metadata
 OPENROUTER_IMAGE_MODELS = [
-    "black-forest-labs/flux.2-flex",
-    "black-forest-labs/flux.2-pro",
-    "bytedance-seed/seedream-4.5",
-    "openai/gpt-image-2",
+    {"id": "black-forest-labs/flux.2-flex", "supports_dimensions": True},
+    {"id": "black-forest-labs/flux.2-pro", "supports_dimensions": True},
+    {"id": "black-forest-labs/flux.2-klein-4b", "supports_dimensions": True},
+    {"id": "bytedance-seed/seedream-4.5", "supports_dimensions": False},
+    {"id": "openai/gpt-image-2", "supports_dimensions": False},
 ]
+
+# Preset dimension options (width × height, must be multiples of 16)
+# Only used for models with supports_dimensions=True
+IMAGE_DIMENSIONS = {
+    "Small (512×384)  — $0.014":  (512, 384),
+    "Medium (768×576) — $0.014":  (768, 576),
+    "Large (1024×768) — $0.014":  (1024, 768),
+    "HD (1360×768)    — $0.015":  (1360, 768),
+    "FHD (1920×1088)  — $0.016": (1920, 1088),
+}
 
 
 def generate_pollinations(
@@ -46,15 +57,36 @@ def generate_pollinations(
     return r.content
 
 
+def _build_or_payload(
+    prompt: str,
+    model: str,
+    width: int | None,
+    height: int | None,
+) -> dict:
+    """Build OpenRouter image gen payload, omitting dimensions if None."""
+    payload: dict = {
+        "model": model,
+        "prompt": prompt,
+        "response_format": "b64_json",
+    }
+    if width is not None and height is not None:
+        payload["width"] = width
+        payload["height"] = height
+    return payload
+
+
 def generate_openrouter(
     prompt: str,
     api_key: str,
     model: str = "bytedance-seed/seedream-4.5",
+    width: int | None = None,
+    height: int | None = None,
     timeout: int = 180,
 ) -> bytes:
     """Generate an image via OpenRouter. Returns raw image bytes.
 
     Requires a valid OpenRouter API key (starts with sk-or-v1-...).
+    width/height must be multiples of 16 if provided. If None, the model uses defaults.
     """
     if not api_key:
         raise ValueError("OpenRouter API key is required")
@@ -65,11 +97,7 @@ def generate_openrouter(
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         },
-        json={
-            "model": model,
-            "prompt": prompt,
-            "response_format": "b64_json",
-        },
+        json=_build_or_payload(prompt, model, width, height),
         timeout=timeout,
     )
     r.raise_for_status()

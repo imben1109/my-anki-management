@@ -15,6 +15,7 @@ from src.api.image_gen import (
     PROVIDER_POLLINATIONS,
     PROVIDER_OPENROUTER,
     OPENROUTER_IMAGE_MODELS,
+    IMAGE_DIMENSIONS,
     generate_pollinations,
     generate_openrouter,
 )
@@ -23,8 +24,20 @@ from src.api.image_gen import (
 class _ImageGenMixin:
     """Mixin providing the AI image generation dialog."""
 
-    def _open_image_gen_dialog(self, _event: ft.ControlEvent | None = None, initial_prompt: str = "") -> None:
-        """Open the image generation dialog with provider + model selection."""
+    def _open_image_gen_dialog(
+        self,
+        _event: ft.ControlEvent | None = None,
+        initial_prompt: str = "",
+        generating_description: bool = False,
+        description_prompt: str = "",
+        vocab_front: str = "",
+    ) -> None:
+        """Open the image generation dialog with provider + model selection.
+
+        When generating_description=True, the dialog opens immediately showing a
+        progress ring while the AI generates a description. Once ready, the prompt
+        field is populated and a "Regenerate" button appears for retries.
+        """
         # Track generated image for attach-to-card
         self._gen_image_url: str | None = None
         self._gen_image_path: Path | None = None
@@ -37,18 +50,45 @@ class _ImageGenMixin:
             ],
             value=PROVIDER_POLLINATIONS,
         )
+        model_ids = [m["id"] for m in OPENROUTER_IMAGE_MODELS]
         model_dd = ft.Dropdown(
             label="Model",
-            options=[ft.dropdown.Option(m) for m in OPENROUTER_IMAGE_MODELS],
-            value=OPENROUTER_IMAGE_MODELS[0],
+            options=[ft.dropdown.Option(m) for m in model_ids],
+            value=model_ids[0],
             visible=False,
         )
 
+        dim_keys = list(IMAGE_DIMENSIONS.keys())
+        dim_dd = ft.Dropdown(
+            label="Dimensions",
+            options=[ft.dropdown.Option(k) for k in dim_keys],
+            value=dim_keys[1],  # default: Medium (768×576)
+            dense=True,
+            visible=True,  # Pollinations is default, supports dimensions
+        )
+
+        def _model_supports_dimensions() -> bool:
+            """Check if the currently selected model supports width/height."""
+            if provider_dd.value == PROVIDER_POLLINATIONS:
+                return True
+            model_id = model_dd.value
+            for m in OPENROUTER_IMAGE_MODELS:
+                if m["id"] == model_id:
+                    return m["supports_dimensions"]
+            return False
+
         def on_provider_change(e: ft.ControlEvent) -> None:
-            model_dd.visible = provider_dd.value == PROVIDER_OPENROUTER
+            is_or = provider_dd.value == PROVIDER_OPENROUTER
+            model_dd.visible = is_or
+            dim_dd.visible = _model_supports_dimensions()
+            self.page.update()
+
+        def on_model_change(e: ft.ControlEvent) -> None:
+            dim_dd.visible = _model_supports_dimensions()
             self.page.update()
 
         provider_dd.on_change = on_provider_change
+        model_dd.on_change = on_model_change
 
         prompt_field = ft.TextField(
             label="Image description",
@@ -58,6 +98,33 @@ class _ImageGenMixin:
             min_lines=2,
             max_lines=4,
             expand=True,
+            read_only=generating_description,
+        )
+
+        # Description generation progress (hidden unless generating)
+        desc_ring = ft.ProgressRing(width=16, height=16, visible=generating_description)
+        desc_status = ft.Text(
+            "Generating description..." if generating_description else "",
+            color=ft.Colors.BLUE_700,
+            visible=generating_description,
+        )
+
+        def _on_regenerate(e: ft.ControlEvent) -> None:
+            """Re-run the AI description generation from within the dialog."""
+            prompt_field.value = ""
+            prompt_field.read_only = True
+            desc_ring.visible = True
+            desc_status.value = "Generating description..."
+            desc_status.color = ft.Colors.BLUE_700
+            regenerate_btn.visible = False
+            self.page.update()
+            self._run_description_agent(description_prompt, prompt_field, desc_ring, desc_status, regenerate_btn)
+
+        regenerate_btn = ft.TextButton(
+            "Regenerate description",
+            icon=ft.Icons.REFRESH,
+            visible=generating_description and bool(vocab_front),
+            on_click=_on_regenerate,
         )
         image_display = ft.Image(
             src="",
@@ -103,14 +170,23 @@ class _ImageGenMixin:
                         controls=[provider_dd, model_dd],
                         spacing=10,
                     ),
+                    ft.Row(
+                        controls=[dim_dd],
+                        spacing=10,
+                    ),
                     prompt_field,
+                    ft.Row(
+                        controls=[desc_ring, desc_status, regenerate_btn],
+                        spacing=8,
+                        visible=generating_description or bool(vocab_front),
+                    ),
                     ft.Row(
                         controls=[
                             ft.FilledButton(
                                 "Generate",
                                 icon=ft.Icons.AUTO_AWESOME,
                                 on_click=lambda e: self._generate_image(
-                                    provider_dd, model_dd, prompt_field,
+                                    provider_dd, model_dd, dim_dd, prompt_field,
                                     image_display, status_text, ring, button_row,
                                 ),
                             ),
@@ -128,6 +204,45 @@ class _ImageGenMixin:
         )
         self.page.open(dialog)
 
+        # If generating description, kick off the agent now that dialog is open
+        if generating_description and description_prompt:
+            self._run_description_agent(
+                description_prompt, prompt_field, desc_ring, desc_status, regenerate_btn,
+            )
+
+    # ------------------------------------------------------------------
+    # Description generation (AI agent)
+    # ------------------------------------------------------------------
+    def _run_description_agent(
+        self,
+        prompt: str,
+        prompt_field: ft.TextField,
+        desc_ring: ft.ProgressRing,
+        desc_status: ft.Text,
+        regenerate_btn: ft.TextButton,
+    ) -> None:
+        """Run the AI agent to generate an image description from a vocab prompt."""
+        import asyncio as _asyncio
+
+        def _worker() -> None:
+            result = ""
+            try:
+                result = _asyncio.run(self._run_agent(prompt))
+            except Exception as exc:
+                import traceback
+
+                result = f"Error: {exc}\n{traceback.format_exc()}"
+
+            prompt_field.value = result
+            prompt_field.read_only = False
+            desc_ring.visible = False
+            desc_status.value = "Description ready. Edit or generate image."
+            desc_status.color = ft.Colors.GREEN_700
+            regenerate_btn.visible = True
+            self.page.update()
+
+        self.page.run_thread(_worker)
+
     # ------------------------------------------------------------------
     # Image generation dispatch
     # ------------------------------------------------------------------
@@ -135,6 +250,7 @@ class _ImageGenMixin:
         self,
         provider_dd: ft.Dropdown,
         model_dd: ft.Dropdown,
+        dim_dd: ft.Dropdown,
         prompt_field: ft.TextField,
         image_display: ft.Image,
         status_text: ft.Text,
@@ -155,12 +271,15 @@ class _ImageGenMixin:
         self.page.update()
 
         save_btn = button_row.controls[0] if button_row.controls else None
+        dim_key = dim_dd.value or list(IMAGE_DIMENSIONS.keys())[1]
+        width, height = IMAGE_DIMENSIONS[dim_key] if dim_dd.visible else (None, None)
 
         if provider_dd.value == PROVIDER_OPENROUTER:
-            self._generate_openrouter(prompt, model_dd.value or OPENROUTER_IMAGE_MODELS[0],
-                                image_display, status_text, ring, save_btn)
+            self._generate_openrouter(prompt, model_dd.value or model_ids[0],
+                                width, height, image_display, status_text, ring, save_btn)
         else:
-            self._generate_pollinations(prompt, image_display, status_text, ring, save_btn)
+            self._generate_pollinations(prompt, width or 768, height or 576,
+                                image_display, status_text, ring, save_btn)
 
     # ------------------------------------------------------------------
     # Pollinations.ai backend (free)
@@ -168,6 +287,8 @@ class _ImageGenMixin:
     def _generate_pollinations(
         self,
         prompt: str,
+        width: int,
+        height: int,
         image_display: ft.Image,
         status_text: ft.Text,
         ring: ft.ProgressRing,
@@ -178,7 +299,7 @@ class _ImageGenMixin:
 
         def _worker() -> None:
             try:
-                img_bytes = generate_pollinations(prompt)
+                img_bytes = generate_pollinations(prompt, width=width, height=height)
                 b64 = base64.b64encode(img_bytes).decode()
                 image_display.src_base64 = b64
                 image_display.visible = True
@@ -205,6 +326,8 @@ class _ImageGenMixin:
         self,
         prompt: str,
         model: str,
+        width: int,
+        height: int,
         image_display: ft.Image,
         status_text: ft.Text,
         ring: ft.ProgressRing,
@@ -223,7 +346,7 @@ class _ImageGenMixin:
 
         def _worker() -> None:
             try:
-                img_bytes = generate_openrouter(prompt, api_key, model=model)
+                img_bytes = generate_openrouter(prompt, api_key, model=model, width=width, height=height)
                 b64 = base64.b64encode(img_bytes).decode()
                 image_display.src_base64 = b64
                 image_display.visible = True

@@ -44,6 +44,8 @@ def build_preview_view(
     # --- Status ---
     copilot_status_text: ft.Text,
     copilot_progress_ring: ft.ProgressRing,
+    # --- Responsive ---
+    is_mobile: bool = False,
 ) -> ft.Container:
     """Build the preview workspace with file browser and editable editor."""
 
@@ -111,20 +113,29 @@ def build_preview_view(
             ),
         ],
         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+        wrap=True,
     )
+
+    # Stack vertically on mobile, side-by-side on desktop
+    if is_mobile:
+        content_row = ft.Column(
+            controls=[file_browser, preview_editor],
+            spacing=12,
+            expand=True,
+            scroll=ft.ScrollMode.AUTO,
+        )
+    else:
+        content_row = ft.Row(
+            controls=[file_browser, preview_editor],
+            spacing=12,
+            expand=True,
+        )
 
     return ft.Container(
         content=ft.Column(
             controls=[
                 toolbar,
-                ft.Row(
-                    controls=[
-                        file_browser,
-                        preview_editor,
-                    ],
-                    spacing=12,
-                    expand=True,
-                ),
+                content_row,
                 # Compact status bar
                 ft.Container(
                     content=ft.Row(

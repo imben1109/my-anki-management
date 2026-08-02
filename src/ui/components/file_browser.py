@@ -44,6 +44,7 @@ def build_file_browser(
     search_field_ref: ft.TextField | None = None,
     file_list: ft.ListView | None = None,
     deck_filter: ft.Dropdown | None = None,
+    is_mobile: bool = False,
 ) -> ft.Container:
     """Build the file browser with search and refresh.
 

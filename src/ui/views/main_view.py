@@ -38,6 +38,8 @@ def build_main_view(
     log_field: ft.TextField | None = None,
     status_text: ft.Text | None = None,
     progress_ring: ft.ProgressRing | None = None,
+    # --- Responsive ---
+    is_mobile: bool = False,
 ) -> ft.Row:
     """Build the main manage-decors workspace."""
 
@@ -126,6 +128,13 @@ def build_main_view(
         expand=2,
     )
 
+    if is_mobile:
+        return ft.Column(
+            controls=[left_panel, right_panel],
+            spacing=12,
+            expand=True,
+            scroll=ft.ScrollMode.AUTO,
+        )
     return ft.Row(
         controls=[left_panel, right_panel],
         spacing=16,

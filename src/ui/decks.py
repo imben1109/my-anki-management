@@ -736,21 +736,19 @@ class _DecksMixin:
 
     def _generate_image_description(self, _event: ft.ControlEvent | None = None) -> None:
         """Use AI to generate a vivid image description from the Front field,
-        then open the image gen dialog with that description."""
+        then open the image gen dialog with that description.
+
+        Opens the dialog immediately showing a progress indicator, then populates
+        the prompt when the description arrives. User can regenerate from within."""
         path = self.selected_preview_path
         if path is None:
             self._report_copilot_issue("No markdown file selected for preview.")
             return
 
-        # Use the editable front content (already parsed and loaded)
         front = self.editable_front.value.strip() if self.editable_front.value else ""
         if not front:
             self._report_copilot_issue("No Front field found in the current note.")
             return
-
-        self.copilot_status_text.value = "Generating image description..."
-        self.copilot_status_text.color = ft.Colors.BLUE_700
-        self.page.update()
 
         prompt = (
             "You are a language learning assistant using the comprehensible input method. "
@@ -761,20 +759,13 @@ class _DecksMixin:
             f"Vocabulary: {front}"
         )
 
-        def _worker() -> None:
-            import asyncio
-            try:
-                description = asyncio.run(self._run_agent(prompt)).strip()
-            except Exception as exc:
-                description = f"Error: {exc}"
-
-            # Open image gen dialog with the generated description
-            self._open_image_gen_dialog(initial_prompt=description)
-            self.copilot_status_text.value = "Description ready."
-            self.copilot_status_text.color = ft.Colors.GREEN_700
-            self.page.update()
-
-        threading.Thread(target=_worker, daemon=True).start()
+        # Open the dialog first with a "generating" state, then run agent
+        self._open_image_gen_dialog(
+            initial_prompt="",
+            generating_description=True,
+            description_prompt=prompt,
+            vocab_front=front,
+        )
 
     def _generate_image_from_front(self, _event: ft.ControlEvent | None = None) -> None:
         """Open image gen dialog pre-filled with the Front section of the current note."""
