@@ -149,24 +149,6 @@ class _AgentChatMixin:
 
         self.page.run_thread(_run_and_update)
 
-    async def _run_agent(self, prompt: str) -> str:
-        """Run the agent asynchronously and return the final output."""
-        provider = self._get_agent_provider()
-
-        if not provider._stored_api_key:
-            return (
-                "Error: No API key configured.\n\n"
-                "Set the AI_CHAT_API_KEY environment variable:\n"
-                "  export AI_CHAT_API_KEY=sk-your-key-here\n\n"
-                "Then restart the app."
-            )
-
-        agent = self._build_agent()
-        config = RunConfig(model_provider=provider, tracing_disabled=True)
-
-        result = await Runner.run(agent, prompt, run_config=config)
-        return result.final_output
-
     def _reset_agent_chat(
         self, output_field: ft.Text, status_text: ft.Text
     ) -> None:
