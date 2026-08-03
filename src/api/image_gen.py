@@ -115,3 +115,13 @@ def generate_openrouter(
         raise ValueError("Empty b64_json in response")
 
     return base64.b64decode(img_b64)
+
+
+def model_supports_dimensions(provider: str, model_id: str) -> bool:
+    """Check whether the given provider+model supports width/height parameters."""
+    if provider == PROVIDER_POLLINATIONS:
+        return True
+    for m in OPENROUTER_IMAGE_MODELS:
+        if m["id"] == model_id:
+            return m["supports_dimensions"]
+    return False

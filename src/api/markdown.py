@@ -17,6 +17,56 @@ def extract_section(name: str, text: str) -> str:
     return match.group(1).strip() if match else ""
 
 
+def parse_note_sections(text: str) -> dict:
+    """Parse a markdown note into its structural components.
+
+    Returns a dict with keys: title, meta_lines, front, back, image.
+    title is the text after the "# " heading. meta_lines are the metadata
+    lines between the title and the first ## section.
+    """
+    title_match = re.match(r"^# (.+)", text)
+    title = title_match.group(1) if title_match else ""
+
+    meta_lines: list[str] = []
+    front_content = ""
+    back_content = ""
+    image_content = ""
+
+    sections = re.split(r"^## ", text, flags=re.MULTILINE)
+    for i, section in enumerate(sections):
+        section_stripped = section.strip()
+        if section_stripped.startswith("Front"):
+            front_content = section_stripped[len("Front"):].strip()
+        elif section_stripped.startswith("Back"):
+            back_content = section_stripped[len("Back"):].strip()
+        elif section_stripped.startswith("Image"):
+            image_content = section_stripped[len("Image"):].strip()
+        elif i == 0:
+            # Header block: skip the # title line, collect metadata
+            lines = section.splitlines()
+            for line in lines[1:]:
+                line = line.strip()
+                if line and not line.startswith("##"):
+                    meta_lines.append(line)
+
+    return {
+        "title": title,
+        "meta_lines": meta_lines,
+        "front": front_content,
+        "back": back_content,
+        "image": image_content,
+    }
+
+
+def extract_image_ref(image_content: str) -> str:
+    """Extract the image path from a markdown image reference.
+
+    Returns the path like 'images/foo.png' or empty string.
+    """
+    match = re.search(r"!\[.*?\]\((images/[^)]+)\)", image_content)
+    return match.group(1) if match else ""
+
+
 def build_description_prompt(vocab_front: str) -> str:
     """Build the AI prompt for generating a vivid image description from vocabulary."""
     return (

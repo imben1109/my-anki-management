@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Flet UI for Anki deck listing, export, and update workflows.
+"""Flet UI for Anki deck listing, update, and preview workflows.
 
 Architecture:
   - src/api/       — Business logic (no Flet imports)
@@ -46,7 +46,6 @@ class AnkiManagerUI(_HelpersMixin, _AgentChatMixin, _ImageGenMixin, _DecksMixin)
         self.selected_deck: str | None = None
         self.selected_preview_path: Path | None = None
         self.preview_files: list[Path] = []
-        self.exported_decks: list[str] = []
         self._deck_filter_active: str | None = None
         self._md_cache: dict[Path, str] = {}
         self._preview_row_map: dict[Path, ft.Container] = {}
@@ -62,16 +61,6 @@ class AnkiManagerUI(_HelpersMixin, _AgentChatMixin, _ImageGenMixin, _DecksMixin)
         # --- Shared control references used across views ---
         self.output_field = ft.TextField(
             label="Output folder", value=default_output, expand=True,
-        )
-        self.query_field = ft.TextField(
-            label="Custom query",
-            hint_text='Example: deck:"My Deck"',
-            expand=True,
-        )
-        self.update_target_field = ft.TextField(
-            label="Update target (.md file or directory)",
-            value=default_output,
-            expand=True,
         )
         self.preview_path_text = ft.Text(
             "Select an exported Markdown file to preview it.",
@@ -135,11 +124,7 @@ class AnkiManagerUI(_HelpersMixin, _AgentChatMixin, _ImageGenMixin, _DecksMixin)
 
         # --- File pickers ---
         self.output_dir_picker = ft.FilePicker(on_result=self._handle_output_dir_picked)
-        self.update_dir_picker = ft.FilePicker(on_result=self._handle_update_dir_picked)
-        self.update_file_picker = ft.FilePicker(on_result=self._handle_update_file_picked)
         self.page.overlay.append(self.output_dir_picker)
-        self.page.overlay.append(self.update_dir_picker)
-        self.page.overlay.append(self.update_file_picker)
 
         self._refresh_preview_files()
         self._build_ui()
@@ -175,12 +160,7 @@ class AnkiManagerUI(_HelpersMixin, _AgentChatMixin, _ImageGenMixin, _DecksMixin)
             on_select_deck=self._select_deck,
             on_export_selected=self.export_selected_deck,
             output_field=self.output_field,
-            query_field=self.query_field,
             on_choose_output_folder=self.choose_output_folder,
-            on_export_query=self.export_custom_query,
-            update_target_field=self.update_target_field,
-            on_choose_update_folder=self.choose_update_folder,
-            on_choose_update_file=self.choose_update_file,
             on_update=self.update_notes,
             log_field=self.log_field,
             status_text=self.status_text,

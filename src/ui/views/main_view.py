@@ -1,6 +1,6 @@
-"""Main workspace view — decks, export, update, and logs.
+"""Main workspace view — decks, update, and logs.
 
-Composes deck_list, export_card, update_card, and log panel components.
+Composes deck_list, update_card, and log panel components.
 """
 
 from __future__ import annotations
@@ -10,7 +10,6 @@ from typing import Callable
 import flet as ft
 
 from src.ui.components.deck_list import build_deck_item, build_deck_list, render_deck_list
-from src.ui.components.export_card import build_export_card
 from src.ui.components.update_card import build_update_card
 
 
@@ -24,15 +23,10 @@ def build_main_view(
     on_refresh: Callable[[ft.ControlEvent], None] | None = None,
     on_select_deck: Callable[[str], None] | None = None,
     on_export_selected: Callable[[ft.ControlEvent], None] | None = None,
-    # --- Export card ---
+    # --- Output folder ---
     output_field: ft.TextField | None = None,
-    query_field: ft.TextField | None = None,
     on_choose_output_folder: Callable[[], None] | None = None,
-    on_export_query: Callable[[ft.ControlEvent], None] | None = None,
-    # --- Update card ---
-    update_target_field: ft.TextField | None = None,
-    on_choose_update_folder: Callable[[], None] | None = None,
-    on_choose_update_file: Callable[[], None] | None = None,
+    # --- Update ---
     on_update: Callable[[ft.ControlEvent], None] | None = None,
     # --- Logs ---
     log_field: ft.TextField | None = None,
@@ -41,7 +35,7 @@ def build_main_view(
     # --- Responsive ---
     is_mobile: bool = False,
 ) -> ft.Row:
-    """Build the main manage-decors workspace."""
+    """Build the main manage-notes workspace."""
 
     # --- Left panel: deck list ---
     if deck_list_view is None:
@@ -80,25 +74,12 @@ def build_main_view(
         expand=1,
     )
 
-    # --- Right panel cards ---
-    export_card = build_export_card(
-        output_value=output_field.value or "",
-        query_value=query_field.value or "",
-        on_output_change=None,
-        on_query_change=None,
-        on_choose_folder=on_choose_output_folder,
-        on_export_query=on_export_query,
-        output_field_ref=output_field,
-        query_field_ref=query_field,
-    )
-
+    # --- Right panel: update + logs ---
     update_card = build_update_card(
-        target_value=update_target_field.value or "",
-        on_target_change=None,
-        on_pick_folder=on_choose_update_folder,
-        on_pick_file=on_choose_update_file,
+        output_value=output_field.value or "",
+        output_field_ref=output_field,
+        on_choose_folder=on_choose_output_folder,
         on_update=on_update,
-        target_field_ref=update_target_field,
     )
 
     logs_card = ft.Container(
@@ -123,7 +104,7 @@ def build_main_view(
     )
 
     right_panel = ft.Column(
-        controls=[export_card, update_card, logs_card],
+        controls=[update_card, logs_card],
         spacing=12,
         expand=2,
     )

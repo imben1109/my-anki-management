@@ -18,6 +18,7 @@ from src.api.image_gen import (
     IMAGE_DIMENSIONS,
     generate_pollinations,
     generate_openrouter,
+    model_supports_dimensions,
 )
 
 
@@ -67,24 +68,17 @@ class _ImageGenMixin:
             visible=True,  # Pollinations is default, supports dimensions
         )
 
-        def _model_supports_dimensions() -> bool:
-            """Check if the currently selected model supports width/height."""
-            if provider_dd.value == PROVIDER_POLLINATIONS:
-                return True
-            model_id = model_dd.value
-            for m in OPENROUTER_IMAGE_MODELS:
-                if m["id"] == model_id:
-                    return m["supports_dimensions"]
-            return False
+        def _check_dims() -> bool:
+            return model_supports_dimensions(provider_dd.value, model_dd.value)
 
         def on_provider_change(e: ft.ControlEvent) -> None:
             is_or = provider_dd.value == PROVIDER_OPENROUTER
             model_dd.visible = is_or
-            dim_dd.visible = _model_supports_dimensions()
+            dim_dd.visible = _check_dims()
             self.page.update()
 
         def on_model_change(e: ft.ControlEvent) -> None:
-            dim_dd.visible = _model_supports_dimensions()
+            dim_dd.visible = _check_dims()
             self.page.update()
 
         provider_dd.on_change = on_provider_change

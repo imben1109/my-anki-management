@@ -17,6 +17,38 @@ from src.api.markdown import extract_section, build_description_prompt
 from src.api.image_gen import generate_pollinations, generate_openrouter
 
 
+def filter_cards_to_process(
+    files: list[Path],
+    regenerate_all: bool = False,
+) -> list[Path]:
+    """Pre-scan files to find cards that need image generation.
+
+    Args:
+        files: List of .md file paths to scan.
+        regenerate_all: If True, include all cards with a Front field.
+                        If False, only include cards without an existing Image.
+
+    Returns:
+        List of paths that need processing.
+    """
+    to_process: list[Path] = []
+    for path in files:
+        try:
+            content = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        front = extract_section("Front", content)
+        if not front:
+            continue
+        if regenerate_all:
+            to_process.append(path)
+        else:
+            image = extract_section("Image", content)
+            if not image:
+                to_process.append(path)
+    return to_process
+
+
 def process_single_card(
     path: Path,
     provider: str,

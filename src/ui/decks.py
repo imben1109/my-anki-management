@@ -13,15 +13,23 @@ from typing import Callable
 
 import flet as ft
 
-from src.api.markdown import extract_section, build_description_prompt, rebuild_note_content, save_image_and_update_note
+from src.api.markdown import (
+    extract_section,
+    parse_note_sections,
+    extract_image_ref,
+    build_description_prompt,
+    rebuild_note_content,
+    save_image_and_update_note,
+)
 from src.api.parsing import parse_decks, deck_query
 from src.api.image_gen import (
     PROVIDER_POLLINATIONS,
     PROVIDER_OPENROUTER,
     OPENROUTER_IMAGE_MODELS,
     IMAGE_DIMENSIONS,
+    model_supports_dimensions,
 )
-from src.api.batch import process_single_card, sync_to_anki
+from src.api.batch import process_single_card, sync_to_anki, filter_cards_to_process
 
 
 MACOS_FOLDER_PICKER_SCRIPT = """
@@ -35,7 +43,7 @@ end run
 
 
 class _DecksMixin:
-    """Mixin providing deck listing, export/update, file pickers, and preview."""
+    """Mixin providing deck listing, update workflows, file pickers, and preview."""
 
     def refresh_decks(self, _event: ft.ControlEvent | None = None) -> None:
         previous_deck = self.selected_deck
@@ -123,20 +131,6 @@ class _DecksMixin:
             return
 
         query = self._deck_query(self.selected_deck)
-        self.query_field.value = query
-        self.page.update()
-        self._run_export(query)
-
-
-    def export_custom_query(self, _event: ft.ControlEvent | None = None) -> None:
-        if not self._ensure_scripts():
-            return
-
-        query = self.query_field.value.strip()
-        if not query:
-            self._report_issue("Missing query. Enter an Anki query first.")
-            return
-
         self._run_export(query)
 
 
@@ -147,13 +141,11 @@ class _DecksMixin:
             return
 
         output_path = Path(output_dir)
-        # Compute the deck-specific subfolder using same sanitization as export.py
         deck_name = self.selected_deck or "Default"
         safe_deck = re.sub(r"[^\w\s\-]", "", deck_name)
         safe_deck = re.sub(r"\s+", " ", safe_deck).strip() or "Default"
         deck_folder = output_path / safe_deck
 
-        # If deck folder already exists, prompt for confirmation
         if deck_folder.exists() and any(deck_folder.iterdir()):
             self._show_export_confirm_dialog(query, output_dir, output_path, deck_folder)
         else:
@@ -201,8 +193,6 @@ class _DecksMixin:
         cmd = [sys.executable, str(self.export_script), query, output_dir]
 
         def on_success() -> None:
-            if not self.update_target_field.value.strip():
-                self.update_target_field.value = output_dir
             self._refresh_preview_files()
             exported_files = sorted(output_path.rglob("*.md"), key=lambda p: p.stat().st_mtime)
             if exported_files:
@@ -217,33 +207,63 @@ class _DecksMixin:
         if not self._ensure_scripts():
             return
 
-        target = self.update_target_field.value.strip()
-        if not target:
-            self._report_issue(
-                "Missing target. Choose a markdown file or directory to update."
-            )
+        output_dir = self.output_field.value.strip()
+        if not output_dir:
+            self._report_issue("Missing output folder. Set an output folder first.")
             return
 
-        target_path = Path(target)
-        if not target_path.exists():
-            self._report_issue(f"Target path does not exist: {target}")
+        output_path = Path(output_dir)
+        if not output_path.exists():
+            self._report_issue(f"Output folder does not exist: {output_dir}")
             return
 
-        cmd = [sys.executable, str(self.update_script), str(target_path)]
-        self._run_in_thread("Update", cmd)
+        # Deck selection dialog
+        deck_dirs = getattr(self, "_deck_dirs", [])
+        deck_options = [ft.dropdown.Option("__all__", "All decks")] + [
+            ft.dropdown.Option(d, d) for d in deck_dirs
+        ]
+
+        if not deck_dirs:
+            # No subdirectories, just update everything
+            cmd = [sys.executable, str(self.update_script), str(output_path)]
+            self._run_in_thread("Update", cmd)
+            return
+
+        deck_dd = ft.Dropdown(
+            label="Deck to update",
+            options=deck_options,
+            value="__all__",
+        )
+
+        def _do_update(e: ft.ControlEvent) -> None:
+            self.page.close(dialog)
+            selected = deck_dd.value
+            if selected == "__all__":
+                target = output_path
+            else:
+                target = output_path / selected
+            cmd = [sys.executable, str(self.update_script), str(target)]
+            self._run_in_thread("Update", cmd)
+
+        dialog = ft.AlertDialog(
+            title=ft.Text("Update Notes to Anki"),
+            content=ft.Column(
+                controls=[deck_dd],
+                width=300,
+            ),
+            actions=[
+                ft.TextButton("Cancel", on_click=lambda e: self.page.close(dialog)),
+                ft.FilledButton("Update", icon=ft.Icons.UPLOAD_FILE, on_click=_do_update),
+            ],
+        )
+        self.page.open(dialog)
 
 
     def _ensure_scripts(self) -> bool:
-        missing = [
-            str(path.name)
-            for path in (self.export_script, self.update_script)
-            if not path.exists()
-        ]
-        if missing:
+        if not self.update_script.exists():
             self._report_issue(
-                "Missing script(s): "
-                + ", ".join(missing)
-                + ". Expected them next to anki_ui.py."
+                f"Missing script: {self.update_script.name}. "
+                "Expected it next to app.py."
             )
             return False
         return True
@@ -258,14 +278,13 @@ class _DecksMixin:
                 for path in output_path.rglob("*.md"):
                     try:
                         files.append((path.stat().st_mtime, path))
-                        # Collect parent dir name as deck name
                         rel = path.relative_to(output_path)
                         if len(rel.parts) > 1:
                             deck_dirs.add(rel.parts[0])
                     except OSError:
                         continue
             except OSError as exc:
-                self._report_copilot_issue(f"Could not list exported Markdown files: {exc}")
+                self._report_copilot_issue(f"Could not list Markdown files: {exc}")
                 return
 
         self.preview_files = [
@@ -274,17 +293,16 @@ class _DecksMixin:
         if self.selected_preview_path not in self.preview_files:
             self.selected_preview_path = None
 
-        # Update exported decks list and dropdown options
-        self.exported_decks = sorted(deck_dirs)
+        # Update deck filter dropdown from actual subdirectories
+        self._deck_dirs = sorted(deck_dirs)
         dropdown = self.deck_filter_dropdown
         dropdown.options = [ft.dropdown.Option("__all__", "All decks")] + [
-            ft.dropdown.Option(d, d) for d in self.exported_decks
+            ft.dropdown.Option(d, d) for d in self._deck_dirs
         ]
         if dropdown.value not in {o.key for o in dropdown.options}:
             dropdown.value = "__all__"
 
         self._render_preview_file_list()
-        # Don't auto-switch to preview during startup — only when user clicks "Markdown preview"
 
 
     def _on_preview_search(self, _event: ft.ControlEvent) -> None:
@@ -365,7 +383,7 @@ class _DecksMixin:
             controls.append(
                 ft.Container(
                     content=ft.Text(
-                        "No exported Markdown files found.",
+                        "No Markdown files found.",
                         color=ft.Colors.ON_SURFACE_VARIANT,
                         italic=True,
                     ),
@@ -435,33 +453,9 @@ class _DecksMixin:
             if request != self.preview_load_request:
                 return
 
-            # Parse sections: header (title + metadata), ## Front, ## Back, ## Image
-            title_match = re.match(r"^# (.+)", text)
-            title = title_match.group(1) if title_match else path.stem
-
-            # Extract metadata lines between title and first ## section
-            meta_lines: list[str] = []
-            front_content = ""
-            back_content = ""
-            image_content = ""
-
-            # Split by ## headers
-            sections = re.split(r"^## ", text, flags=re.MULTILINE)
-            for i, section in enumerate(sections):
-                section = section.strip()
-                if i == 0:
-                    # First "section" is the header block (title + metadata)
-                    lines = section.splitlines()
-                    for line in lines[1:]:  # skip the # title line
-                        line = line.strip()
-                        if line and not line.startswith("##"):
-                            meta_lines.append(line)
-                elif section.startswith("Front"):
-                    front_content = section[len("Front"):].strip()
-                elif section.startswith("Back"):
-                    back_content = section[len("Back"):].strip()
-                elif section.startswith("Image"):
-                    image_content = section[len("Image"):].strip()
+            sections = parse_note_sections(text)
+            title = sections["title"] or path.stem
+            meta_lines = sections["meta_lines"]
 
             header_parts = [title]
             for line in meta_lines:
@@ -470,21 +464,21 @@ class _DecksMixin:
             header_text = "  ·  ".join(header_parts)
 
             # Resolve image path for preview
+            image_ref = extract_image_ref(sections["image"])
             image_src = ""
-            img_match = re.search(r"!\[.*?\]\((images/[^)]+)\)", image_content)
-            if img_match:
+            if image_ref:
                 output_dir = Path(self.output_field.value.strip()).resolve()
                 try:
                     rel_dir = path.resolve().parent.relative_to(output_dir)
-                    image_src = f"http://localhost:8551/{rel_dir}/{img_match.group(1)}"
+                    image_src = f"http://localhost:8551/{rel_dir}/{image_ref}"
                 except ValueError:
                     pass
 
             # Batch all worker updates
             self.editable_header.value = header_text
-            self.editable_front.value = front_content
-            self.editable_back.value = back_content
-            self.editable_image.value = image_content
+            self.editable_front.value = sections["front"]
+            self.editable_back.value = sections["back"]
+            self.editable_image.value = sections["image"]
             if image_src:
                 self.editable_image_preview.src = image_src
                 self.editable_image_preview.visible = True
@@ -492,8 +486,7 @@ class _DecksMixin:
                 self.editable_image_preview.visible = False
             self.editable_save_button.visible = True
 
-            source_label = "disk"
-            self.copilot_status_text.value = f"Previewing {path.name} ({source_label})."
+            self.copilot_status_text.value = f"Previewing {path.name} (disk)."
             self.copilot_status_text.color = ft.Colors.GREEN_700
 
             self.page.update()
@@ -570,12 +563,12 @@ class _DecksMixin:
     def _batch_generate_images(self, _event: ft.ControlEvent | None = None) -> None:
         """Open batch settings dialog, then kick off the worker."""
         if not self.preview_files:
-            self._report_copilot_issue("No exported markdown files found. Export a deck first.")
+            self._report_copilot_issue("No markdown files found.")
             return
 
         # --- Deck scope ---
         deck_options = [ft.dropdown.Option("__all__", "All decks")] + [
-            ft.dropdown.Option(d, d) for d in (getattr(self, "exported_decks", None) or [])
+            ft.dropdown.Option(d, d) for d in getattr(self, "_deck_dirs", [])
         ]
         deck_dd = ft.Dropdown(
             label="Deck scope",
@@ -612,22 +605,16 @@ class _DecksMixin:
             visible=True,
         )
 
-        def _model_supports_dimensions() -> bool:
-            if provider_dd.value == PROVIDER_POLLINATIONS:
-                return True
-            mid = model_dd.value
-            for m in OPENROUTER_IMAGE_MODELS:
-                if m["id"] == mid:
-                    return m["supports_dimensions"]
-            return False
+        def _check_dims() -> bool:
+            return model_supports_dimensions(provider_dd.value, model_dd.value)
 
         def on_provider_change(e: ft.ControlEvent) -> None:
             model_dd.visible = provider_dd.value == PROVIDER_OPENROUTER
-            dim_dd.visible = _model_supports_dimensions()
+            dim_dd.visible = _check_dims()
             self.page.update()
 
         def on_model_change(e: ft.ControlEvent) -> None:
-            dim_dd.visible = _model_supports_dimensions()
+            dim_dd.visible = _check_dims()
             self.page.update()
 
         provider_dd.on_change = on_provider_change
@@ -701,18 +688,7 @@ class _DecksMixin:
             self._report_copilot_issue("No files in selected deck.")
             return
 
-        # Pre-scan
-        to_process: list[Path] = []
-        for path in files:
-            try:
-                content = path.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
-                continue
-            front = extract_section("Front", content)
-            image = extract_section("Image", content)
-            if front:
-                if regenerate_all or not image:
-                    to_process.append(path)
+        to_process = filter_cards_to_process(files, regenerate_all=regenerate_all)
 
         if not to_process:
             self._report_copilot_issue(
@@ -987,58 +963,20 @@ class _DecksMixin:
 
     def _set_output_directory(self, path: str) -> None:
         self.output_field.value = path
-        if not self.update_target_field.value.strip():
-            self.update_target_field.value = path
         self._refresh_preview_files()
-
-
-    def _handle_update_dir_picked(self, event: ft.FilePickerResultEvent) -> None:
-        if not event.path:
-            return
-        self._set_update_directory(event.path)
-
-
-    def _set_update_directory(self, path: str) -> None:
-        self.update_target_field.value = path
-        self.page.update()
-
-
-    def _handle_update_file_picked(self, event: ft.FilePickerResultEvent) -> None:
-        if not event.files:
-            return
-        self.update_target_field.value = event.files[0].path
-        self.page.update()
 
 
     def choose_output_folder(self, _event: ft.ControlEvent) -> None:
         initial_directory = self._existing_directory(self.output_field.value)
         if sys.platform == "darwin":
             self._choose_macos_folder(
-                "Choose export folder",
+                "Choose output folder",
                 initial_directory,
                 self._set_output_directory,
             )
             return
         self.output_dir_picker.get_directory_path(
-            dialog_title="Choose export folder",
-            initial_directory=initial_directory,
-        )
-
-
-    def choose_update_folder(self, _event: ft.ControlEvent) -> None:
-        initial_directory = self._existing_directory(
-            self.update_target_field.value,
-            self.output_field.value,
-        )
-        if sys.platform == "darwin":
-            self._choose_macos_folder(
-                "Choose notes folder to update",
-                initial_directory,
-                self._set_update_directory,
-            )
-            return
-        self.update_dir_picker.get_directory_path(
-            dialog_title="Choose notes folder to update",
+            dialog_title="Choose output folder",
             initial_directory=initial_directory,
         )
 
@@ -1096,17 +1034,3 @@ class _DecksMixin:
             self._set_busy(False)
 
         threading.Thread(target=worker, daemon=True).start()
-
-
-    def choose_update_file(self, _event: ft.ControlEvent) -> None:
-        self.update_file_picker.pick_files(
-            dialog_title="Choose a Markdown note to update",
-            allow_multiple=False,
-            allowed_extensions=["md"],
-            file_type=ft.FilePickerFileType.CUSTOM,
-            initial_directory=self._existing_directory(
-                self.update_target_field.value,
-                self.output_field.value,
-            ),
-        )
-

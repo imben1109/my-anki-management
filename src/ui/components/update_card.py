@@ -1,4 +1,4 @@
-"""Update card component — target field, folder/file pickers, update button."""
+"""Update card component — output folder display and update button."""
 
 from __future__ import annotations
 
@@ -8,38 +8,30 @@ import flet as ft
 
 
 def build_update_card(
-    target_value: str,
-    on_target_change: Callable[[ft.ControlEvent], None] | None,
-    on_pick_folder: Callable[[], None],
-    on_pick_file: Callable[[], None],
+    output_value: str,
+    on_choose_folder: Callable[[], None],
     on_update: Callable[[], None],
-    target_field_ref: ft.TextField | None = None,
+    output_field_ref: ft.TextField | None = None,
 ) -> ft.Container:
-    """Build the update card with target path picker and update button."""
-    target_field = target_field_ref or ft.TextField(
-        label="Update target (.md file or directory)",
-        value=target_value,
+    """Build the update card with output folder display and update button."""
+    output_field = output_field_ref or ft.TextField(
+        label="Output folder",
+        value=output_value,
         expand=True,
+        read_only=True,
     )
-    if on_target_change:
-        target_field.on_change = on_target_change
 
     return ft.Container(
         content=ft.Column(
             controls=[
-                ft.Text("Update", size=18, weight=ft.FontWeight.BOLD),
+                ft.Text("Notes folder", size=18, weight=ft.FontWeight.BOLD),
                 ft.Row(
                     controls=[
-                        target_field,
+                        output_field,
                         ft.OutlinedButton(
-                            "Pick folder",
-                            icon=ft.Icons.FOLDER,
-                            on_click=lambda e: on_pick_folder(),
-                        ),
-                        ft.OutlinedButton(
-                            "Pick file",
-                            icon=ft.Icons.DESCRIPTION,
-                            on_click=lambda e: on_pick_file(),
+                            "Choose folder",
+                            icon=ft.Icons.FOLDER_OPEN,
+                            on_click=lambda e: on_choose_folder(),
                         ),
                     ],
                     vertical_alignment=ft.CrossAxisAlignment.END,
