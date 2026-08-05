@@ -163,7 +163,7 @@ class _AgentChatMixin:
     def _on_agent_dialog_dismiss(self, output_field: ft.Text) -> None:
         """Sync dialog state back to main log field."""
         self._agent_dialog = None
-        self.copilot_log_field.value = output_field.value
+        self.copilot_log_text.value = output_field.value
 
     # ------------------------------------------------------------------
     # Inline chat (preview workspace) — delegates to dialog approach

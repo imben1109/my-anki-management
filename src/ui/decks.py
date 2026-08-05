@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 import shutil
@@ -223,10 +224,46 @@ class _DecksMixin:
             ft.dropdown.Option(d, d) for d in deck_dirs
         ]
 
+        def _run_update(target: Path) -> None:
+            self._append_log(f"$ python3 {self.update_script.name} {target}")
+            self._set_status("Update running...", ft.Colors.BLUE_700)
+            self._set_busy(True)
+            self.log_text.value = ""
+            self.page.update()
+
+            def worker() -> None:
+                import select
+                count = 0
+                try:
+                    proc = subprocess.Popen(
+                        [sys.executable, str(self.update_script), str(target)],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        bufsize=1,
+                    )
+                    for line in proc.stdout:
+                        line = line.rstrip("\n")
+                        if line:
+                            self._append_log(line)
+                            count += 1
+                            self._set_status(f"Updating... {count} file(s) processed", ft.Colors.BLUE_700)
+                    proc.wait()
+                    if proc.returncode == 0:
+                        self._set_status(f"Update done: {count} file(s) synced.", ft.Colors.GREEN_700)
+                    else:
+                        self._set_status(f"Update finished with exit code {proc.returncode}.", ft.Colors.ORANGE_700)
+                except FileNotFoundError:
+                    self._report_issue("Update failed: python3 not found.")
+                except Exception as exc:
+                    self._report_issue(f"Update failed: {exc}")
+                finally:
+                    self._set_busy(False)
+
+            threading.Thread(target=worker, daemon=True).start()
+
         if not deck_dirs:
-            # No subdirectories, just update everything
-            cmd = [sys.executable, str(self.update_script), str(output_path)]
-            self._run_in_thread("Update", cmd)
+            _run_update(output_path)
             return
 
         deck_dd = ft.Dropdown(
@@ -238,12 +275,8 @@ class _DecksMixin:
         def _do_update(e: ft.ControlEvent) -> None:
             self.page.close(dialog)
             selected = deck_dd.value
-            if selected == "__all__":
-                target = output_path
-            else:
-                target = output_path / selected
-            cmd = [sys.executable, str(self.update_script), str(target)]
-            self._run_in_thread("Update", cmd)
+            target = output_path if selected == "__all__" else output_path / selected
+            _run_update(target)
 
         dialog = ft.AlertDialog(
             title=ft.Text("Update Notes to Anki"),
@@ -704,13 +737,12 @@ class _DecksMixin:
         self.copilot_progress_ring.visible = True
         self.page.update()
 
-        threading.Thread(
-            target=self._batch_worker_thread,
-            args=(to_process, total, provider, model, width, height),
-            daemon=True,
-        ).start()
+        self.page.run_task(
+            self._batch_worker_async,
+            to_process, total, provider, model, width, height,
+        )
 
-    def _batch_worker_thread(
+    async def _batch_worker_async(
         self,
         to_process: list[Path],
         total: int,
@@ -719,7 +751,7 @@ class _DecksMixin:
         width: int | None,
         height: int | None,
     ) -> None:
-        """Thread worker using src/api/batch.py for the actual processing."""
+        """Async batch worker running on Flet event loop — UI updates are reliable."""
         api_key = os.environ.get("OPENROUTER_API_KEY", "")
         ai_key = os.environ.get("AI_CHAT_API_KEY", "")
         using_or = provider == PROVIDER_OPENROUTER
@@ -727,21 +759,36 @@ class _DecksMixin:
             self.copilot_status_text.value = "Set OPENROUTER_API_KEY."
             self.copilot_status_text.color = ft.Colors.RED_700
             self.copilot_progress_ring.visible = False
-            self.page.update()
+            await self.page.update_async()
             return
         if not ai_key:
             self.copilot_status_text.value = "Set AI_CHAT_API_KEY."
             self.copilot_status_text.color = ft.Colors.RED_700
             self.copilot_progress_ring.visible = False
-            self.page.update()
+            await self.page.update_async()
             return
 
         success = 0
         failed = 0
+        loop = asyncio.get_running_loop()
+
+        self._append_log(f"Batch: processing {total} card(s) — {provider}/{model}")
+        self.copilot_log_lines = []
 
         for i, path in enumerate(to_process):
             name = path.name
-            ok, detail = process_single_card(
+            self._log_batch_progress(i, total, name, "AI describing...")
+            await self.page.update_async()
+
+            def _step_progress(step: str, idx: int = i, fname: str = name) -> None:
+                """Schedule UI update on the event loop from the worker thread."""
+                loop.call_soon_threadsafe(
+                    lambda: self._log_batch_progress(idx, total, fname, step)
+                )
+                loop.call_soon_threadsafe(self.page.update)
+
+            ok, detail = await asyncio.to_thread(
+                process_single_card,
                 path=path,
                 provider=provider,
                 model=model,
@@ -749,13 +796,16 @@ class _DecksMixin:
                 height=height,
                 api_key=api_key,
                 agent_runner=self._run_agent,
+                on_progress=_step_progress,
             )
             if ok:
                 success += 1
-                self._log_batch_progress(i, total, name, detail, True)
+                self._append_log(f"  [{i+1}/{total}] {name} {detail}")
             else:
                 failed += 1
-                self._log_batch_progress(i, total, name, detail, False)
+                self._append_log(f"  [{i+1}/{total}] {name} FAIL: {detail}")
+            self._log_batch_progress(i, total, name, detail)
+            await self.page.update_async()
 
         # Final: update to Anki if any succeeded
         final_msg = f"Batch done: {success} updated, {failed} failed."
@@ -763,25 +813,27 @@ class _DecksMixin:
             final_msg += " Updating Anki..."
             self.copilot_status_text.value = final_msg
             self.copilot_status_text.color = ft.Colors.BLUE_700
-            self.page.update()
+            await self.page.update_async()
 
-            ok, sync_msg = sync_to_anki(
+            ok, sync_msg = await asyncio.to_thread(
+                sync_to_anki,
                 self.output_field.value.strip(),
                 self.update_script,
             )
             final_msg = f"Batch done: {success} cards {sync_msg.lower()}, {failed} failed."
 
+        self._append_log(final_msg)
         self.copilot_status_text.value = final_msg
         self.copilot_status_text.color = ft.Colors.GREEN_700 if failed == 0 else ft.Colors.ORANGE_700
         self.copilot_progress_ring.visible = False
-        self.page.update()
+        await self.page.update_async()
         self._refresh_preview_files()
 
-    def _log_batch_progress(self, i: int, total: int, name: str, detail: str, ok: bool) -> None:
-        """Update status bar with batch progress."""
-        self.copilot_status_text.value = f"Batch: {i+1}/{total} - {name} {detail}"
-        self.copilot_status_text.color = ft.Colors.BLUE_700 if ok else ft.Colors.ORANGE_700
-        self.page.update()
+    def _log_batch_progress(self, i: int, total: int, name: str, detail: str) -> None:
+        """Set status bar with batch progress (caller must handle page.update())."""
+        msg = f"[{i+1}/{total}] {name} {detail}"
+        self.copilot_status_text.value = msg
+        self.copilot_status_text.color = ft.Colors.BLUE_700
 
     def _generate_image_description(self, _event: ft.ControlEvent | None = None) -> None:
         """Use AI to generate a vivid image description from the Front field,

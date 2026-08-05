@@ -99,18 +99,24 @@ class AnkiManagerUI(_HelpersMixin, _AgentChatMixin, _ImageGenMixin, _DecksMixin)
 
         self.status_text = ft.Text("Ready.", color=ft.Colors.ON_SURFACE_VARIANT)
         self.progress_ring = ft.ProgressRing(width=16, height=16, visible=False)
-        self.log_field = ft.TextField(
-            value="", multiline=True, min_lines=16, max_lines=24,
-            read_only=True, expand=True, text_size=13,
+        self.log_text = ft.Text(value="", selectable=True, size=13)
+        self.log_scroll = ft.Column(
+            controls=[self.log_text],
+            scroll=ft.ScrollMode.AUTO,
+            expand=True,
         )
         self.copilot_status_text = ft.Text(
             "Ready.", color=ft.Colors.ON_SURFACE_VARIANT, size=12,
         )
         self.copilot_progress_ring = ft.ProgressRing(width=16, height=16, visible=False)
-        self.copilot_log_field = ft.TextField(
-            value="", multiline=True, min_lines=8, max_lines=20,
-            read_only=True, expand=True,
-            text_style=ft.TextStyle(font_family="monospace", size=13),
+        self.copilot_log_text = ft.Text(
+            value="", selectable=True,
+            style=ft.TextStyle(font_family="monospace", size=13),
+        )
+        self.copilot_log_scroll = ft.Column(
+            controls=[self.copilot_log_text],
+            scroll=ft.ScrollMode.AUTO,
+            expand=True,
         )
         self.deck_filter_dropdown = ft.Dropdown(
             label="Deck filter",
@@ -162,7 +168,7 @@ class AnkiManagerUI(_HelpersMixin, _AgentChatMixin, _ImageGenMixin, _DecksMixin)
             output_field=self.output_field,
             on_choose_output_folder=self.choose_output_folder,
             on_update=self.update_notes,
-            log_field=self.log_field,
+            log_field=self.log_scroll,
             status_text=self.status_text,
             progress_ring=self.progress_ring,
         )

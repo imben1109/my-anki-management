@@ -57,6 +57,7 @@ def process_single_card(
     height: int | None,
     api_key: str,
     agent_runner: Callable[[str], str],
+    on_progress: Callable[[str], None] | None = None,
 ) -> tuple[bool, str]:
     """Process a single card: AI description → image gen → save to file.
 
@@ -67,6 +68,7 @@ def process_single_card(
         width/height: Image dimensions (None to use defaults).
         api_key: OpenRouter API key (for provider='openrouter').
         agent_runner: Async function that runs the AI agent and returns a string.
+        on_progress: Optional callback for step-by-step progress (step: str).
 
     Returns:
         Tuple of (success: bool, detail: str).
@@ -83,6 +85,8 @@ def process_single_card(
         return False, "No Front field"
 
     # Step 1: AI description
+    if on_progress:
+        on_progress("AI describing...")
     desc_prompt = build_description_prompt(front)
     try:
         description = asyncio.run(agent_runner(desc_prompt)).strip()
@@ -90,6 +94,8 @@ def process_single_card(
         return False, f"AI error: {exc}"
 
     # Step 2: Generate image
+    if on_progress:
+        on_progress("Generating image...")
     try:
         if provider == "openrouter":
             img_bytes = generate_openrouter(
@@ -106,6 +112,8 @@ def process_single_card(
         return False, f"Image error: {exc}"
 
     # Step 3: Save image and update note
+    if on_progress:
+        on_progress("Saving...")
     images_dir = path.parent / "images"
     images_dir.mkdir(parents=True, exist_ok=True)
     safe_name = re.sub(r"[^\w\-]", "_", front)[:40]

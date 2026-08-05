@@ -1,0 +1,6 @@
+README.md
+setup.py
+Anki_Manager.egg-info/PKG-INFO
+Anki_Manager.egg-info/SOURCES.txt
+Anki_Manager.egg-info/dependency_links.txt
+Anki_Manager.egg-info/top_level.txt

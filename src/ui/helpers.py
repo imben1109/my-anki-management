@@ -38,7 +38,7 @@ class _HelpersMixin:
 
     def _append_log(self, text: str) -> None:
         self.log_lines.append(text)
-        self.log_field.value = "\n".join(self.log_lines)
+        self.log_text.value = "\n".join(self.log_lines)
         self.page.update()
 
 
@@ -52,7 +52,7 @@ class _HelpersMixin:
 
     def _append_copilot_log(self, text: str) -> None:
         self.copilot_log_lines.append(text)
-        self.copilot_log_field.value = "\n".join(self.copilot_log_lines)
+        self.copilot_log_text.value = "\n".join(self.copilot_log_lines)
         self.page.update()
 
 

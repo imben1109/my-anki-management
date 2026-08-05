@@ -29,7 +29,7 @@ def build_main_view(
     # --- Update ---
     on_update: Callable[[ft.ControlEvent], None] | None = None,
     # --- Logs ---
-    log_field: ft.TextField | None = None,
+    log_field: ft.Column | None = None,
     status_text: ft.Text | None = None,
     progress_ring: ft.ProgressRing | None = None,
     # --- Responsive ---

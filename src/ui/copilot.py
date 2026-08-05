@@ -156,7 +156,7 @@ class _CopilotMixin:
     def _on_copilot_dialog_dismiss(self, output_field: ft.TextField) -> None:
         """Sync dialog state back to main copilot log."""
         self._copilot_dialog = None
-        self.copilot_log_field.value = output_field.value
+        self.copilot_log_text.value = output_field.value
 
     def reset_copilot_conversation(
         self, _event: ft.ControlEvent | None = None
